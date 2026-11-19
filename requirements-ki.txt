@@ -1,0 +1,3 @@
+# Optional: KI-Stimmentrennung (Demucs). Groß (~1-3 GB inkl. PyTorch), aber deutlich
+# bessere Erkennung, wenn viel über die Musik gesprochen wird.
+demucs>=4.0

@@ -1,0 +1,5 @@
+# Zusätzlich zum Bauen der Desktop-App
+-r requirements.txt
+pywebview>=5.3
+pyinstaller>=6.10
+pillow>=10

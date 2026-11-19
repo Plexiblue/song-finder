@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Song Finder</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
+    --accent: #3b5bdb; --accent-ink: #fff; --ok: #2b8a3e; --warn: #c77700; --bad: #c92a2a;
+    --chip: #eef0f6; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 4px 16px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --card: #1d1d20; --text: #ececee; --muted: #9a9aa2; --line: #2e2e33;
+      --accent: #7b93ff; --accent-ink: #0e0e10; --ok: #69db7c; --warn: #ffc078; --bad: #ff8787;
+      --chip: #26272d; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 16px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.02em; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+          padding: 20px; box-shadow: var(--shadow); margin-bottom: 16px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  input[type=text], input[type=password], select {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 11px 13px; min-width: 0; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  #url { flex: 1 1 360px; font-size: 16px; }
+  button { font: inherit; cursor: pointer; border-radius: 10px; border: 1px solid var(--line);
+           background: var(--card); color: var(--text); padding: 10px 14px; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+                   font-weight: 600; padding: 11px 20px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; padding: 8px 14px; background: transparent; }
+  .seg button.on { background: var(--accent); color: var(--accent-ink); }
+  .opts { margin-top: 14px; gap: 18px; color: var(--muted); font-size: 14px; }
+  label.tog { display: inline-flex; gap: 8px; align-items: center; cursor: pointer; }
+  details { margin-top: 14px; font-size: 14px; }
+  summary { cursor: pointer; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+  .grid label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 13px; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .bar { height: 8px; background: var(--chip); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+  .err { color: var(--bad); white-space: pre-wrap; }
+  .video { display: flex; gap: 16px; align-items: center; }
+  .video img { width: 160px; aspect-ratio: 16/9; object-fit: cover; border-radius: 8px; flex: none; }
+  .video h2 { font-size: 18px; margin: 0 0 4px; }
+  .timeline { position: relative; height: 26px; background: var(--chip); border-radius: 6px; margin: 16px 0 4px; overflow: hidden; }
+  .timeline span { position: absolute; top: 0; bottom: 0; opacity: .9; }
+  .tl-scale { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+  .song { display: grid; grid-template-columns: 56px 1fr auto; gap: 14px; padding: 14px 0;
+          border-top: 1px solid var(--line); align-items: start; }
+  .song:first-child { border-top: 0; }
+  .cover { width: 56px; height: 56px; border-radius: 8px; background: var(--chip); object-fit: cover;
+           display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; }
+  .title { font-weight: 650; font-size: 16px; }
+  .artist { color: var(--muted); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { background: var(--chip); border-radius: 99px; padding: 2px 10px; font-size: 13px;
+          color: var(--text); text-decoration: none; white-space: nowrap; }
+  a.chip:hover { outline: 1px solid var(--accent); }
+  .badge { display: inline-block; border-radius: 6px; padding: 2px 8px; font-size: 13px; font-weight: 600; }
+  .plat { background: var(--accent); color: var(--accent-ink); }
+  .plat.unknown { background: var(--chip); color: var(--muted); font-weight: 500; }
+  .conf-hoch { color: var(--ok); } .conf-mittel { color: var(--warn); } .conf-niedrig { color: var(--bad); }
+  .meta { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .side { text-align: right; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 13px; }
+  .links a { color: var(--accent); text-decoration: none; }
+  .links a:hover { text-decoration: underline; }
+  .links details.more { margin: 0; display: inline; font-size: 13px; }
+  .links details.more[open] { display: block; margin-top: 4px; }
+  .links details.more summary { display: inline; color: var(--muted); }
+  .exports { gap: 8px; }
+  .credit { padding: 6px 0; border-top: 1px dashed var(--line); font-size: 14px; word-break: break-word; }
+  .credit:first-of-type { border-top: 0; }
+  .credit a { color: var(--accent); }
+  .empty { color: var(--muted); padding: 10px 0; }
+  .hidden { display: none !important; }
+  @media (max-width: 600px) {
+    .song { grid-template-columns: 44px 1fr; }
+    .cover { width: 44px; height: 44px; }
+    .side { grid-column: 1 / -1; align-items: flex-start; text-align: left; flex-direction: row; flex-wrap: wrap; }
+    .video img { width: 110px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>🎵 Song Finder</h1>
+  <p class="sub">YouTube-Link einfügen und alle Songs finden, auch leise Hintergrundmusik unter Stimme und Soundeffekten.</p>
+
+  <section class="card">
+    <form id="form" class="row" autocomplete="off">
+      <input id="url" type="text" placeholder="YouTube-Link hier einfügen" required>
+      <button type="button" id="pick" class="hidden" title="Videodatei vom Computer wählen">📁 Datei</button>
+      <button class="primary" id="go" type="submit">Songs finden</button>
+    </form>
+    <div class="row opts">
+      <span>Gründlichkeit:</span>
+      <div class="seg" id="mode">
+        <button type="button" data-v="schnell">Schnell</button>
+        <button type="button" data-v="normal" class="on">Normal</button>
+        <button type="button" data-v="gruendlich">Gründlich</button>
+      </div>
+      <label class="tog" id="aiwrap"><input type="checkbox" id="ai"> KI-Stimmentrennung</label>
+    </div>
+    <p class="hint" id="aihint"></p>
+    <details>
+      <summary>Erweitert</summary>
+      <div class="row" style="margin-top:12px"><label class="tog"><input type="checkbox" id="side" checked> Stimme per Stereo-Trick ausblenden (empfohlen)</label></div>
+      <div class="grid">
+        <label>Browser-Cookies (bei YouTube-„Bot“-Fehler)
+          <select id="cookies">
+            <option value="">keine</option><option>chrome</option><option>firefox</option>
+            <option>edge</option><option>safari</option><option>brave</option><option>opera</option>
+          </select></label>
+        <label>AudD API-Token (audd.io)<input id="audd_token" type="password" placeholder="optional"></label>
+        <label>ACRCloud Host<input id="acr_host" type="text" placeholder="identify-eu-west-1.acrcloud.com"></label>
+        <label>ACRCloud Access Key<input id="acr_key" type="password" placeholder="optional"></label>
+        <label>ACRCloud Access Secret<input id="acr_secret" type="password" placeholder="optional"></label>
+      </div>
+      <p class="hint">Shazam ist kostenlos und immer aktiv. AudD und ACRCloud sind kostenpflichtig und werden nur
+        gefragt, wenn Shazam für einen Ausschnitt nichts findet. Die Schlüssel bleiben nur in diesem Browser gespeichert.</p>
+    </details>
+  </section>
+
+  <section class="card hidden" id="progress">
+    <div id="pmsg">Starte …</div>
+    <div class="bar"><div id="pbar"></div></div>
+    <div class="hint" id="ppct"></div>
+  </section>
+
+  <section class="card hidden" id="error"><div class="err" id="errmsg"></div></section>
+
+  <div id="results" class="hidden">
+    <section class="card">
+      <div class="video" id="video"></div>
+      <div id="timeline" class="timeline"></div>
+      <div class="tl-scale"><span>0:00</span><span id="tlend"></span></div>
+    </section>
+    <section class="card">
+      <div class="row" style="justify-content:space-between">
+        <h2 style="margin:0;font-size:18px" id="songcount">Songs</h2>
+        <div class="row exports">
+          <button type="button" id="copy">Liste kopieren</button>
+          <button type="button" data-exp="csv">Excel (CSV)</button>
+          <button type="button" data-exp="txt">Text</button>
+          <button type="button" data-exp="json">JSON</button>
+        </div>
+      </div>
+      <div id="songs"></div>
+    </section>
+    <section class="card hidden" id="unsure">
+      <details>
+        <summary id="unsuresum">Unsichere Einzeltreffer</summary>
+        <p class="hint">Nur ein einzelner Ausschnitt hat diesen Song ergeben. Das kann ein kurzer Einspieler sein oder eine Fehlerkennung.</p>
+        <div id="unsuresongs"></div>
+      </details>
+    </section>
+    <section class="card hidden" id="credits">
+      <h2 style="margin:0 0 8px;font-size:18px">Musik-Angaben in der Videobeschreibung</h2>
+      <div id="creditlist"></div>
+    </section>
+    <p class="hint" id="stats"></p>
+  </div>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const KEYS = ["audd_token", "acr_host", "acr_key", "acr_secret", "cookies"];
+const COLORS = ["#4c6ef5","#f76707","#12b886","#e64980","#7950f2","#fab005","#15aabf","#82c91e","#fa5252","#be4bdb"];
+let mode = "normal", jobId = null, lastResult = null, timer = null;
+
+const store = {
+  get(k) { try { return localStorage.getItem("sf_" + k) || ""; } catch { return ""; } },
+  set(k, v) { try { localStorage.setItem("sf_" + k, v); } catch {} },
+};
+KEYS.forEach((k) => { $("#" + k).value = store.get(k); $("#" + k).addEventListener("change", (e) => store.set(k, e.target.value)); });
+if (store.get("mode")) setMode(store.get("mode"));
+
+function setMode(v) {
+  mode = v; store.set("mode", v);
+  document.querySelectorAll("#mode button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
+}
+document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.v)));
+
+let STATUS = {};
+fetch("/api/status").then((r) => r.json()).then((s) => {
+  STATUS = s;
+  if (s.ai_available) { $("#ai").checked = store.get("ai") !== "0"; $("#aihint").textContent = ""; }
+  else if (s.app) { $("#ai").disabled = true; hide("#aiwrap"); }
+  else {
+    $("#ai").disabled = true; $("#aiwrap").style.opacity = .55;
+    $("#aihint").innerHTML = "KI-Stimmentrennung ist nicht installiert. Optional mit <code>pip install -r requirements-ki.txt</code> nachrüsten, das hilft besonders bei viel Sprache über der Musik.";
+  }
+});
+$("#ai").addEventListener("change", (e) => store.set("ai", e.target.checked ? "1" : "0"));
+
+$("#form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("#url").value.trim();
+  if (!url) return;
+  $("#go").disabled = true;
+  show("#progress"); hide("#error"); hide("#results");
+  setProgress(0, "Starte …");
+  const keys = {}; ["audd_token","acr_host","acr_key","acr_secret"].forEach((k) => keys[k] = $("#" + k).value);
+  try {
+    const r = await fetch("/api/analyze", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ url, mode, ai: $("#ai").disabled ? "aus" : ($("#ai").checked ? "an" : "aus"),
+                             side: $("#side").checked, cookies: $("#cookies").value, keys }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Fehler");
+    jobId = d.job; poll();
+  } catch (err) { fail(err.message); }
+});
+
+async function poll() {
+  clearTimeout(timer);
+  try {
+    const d = await (await fetch("/api/job/" + jobId)).json();
+    if (d.state === "running") { setProgress(d.pct, d.msg); timer = setTimeout(poll, 800); return; }
+    $("#go").disabled = false; hide("#progress");
+    if (d.state === "error") return fail(d.error);
+    lastResult = d.result; render(d.result);
+  } catch (err) { timer = setTimeout(poll, 2000); }
+}
+
+function setProgress(p, m) { $("#pbar").style.width = p + "%"; $("#pmsg").textContent = m; $("#ppct").textContent = p + " %"; }
+function fail(m) { $("#go").disabled = false; hide("#progress"); show("#error");
+  $("#errmsg").textContent = m + (STATUS.log ? "\n\nDetails stehen in: " + STATUS.log : ""); }
+function show(s) { $(s).classList.remove("hidden"); } function hide(s) { $(s).classList.add("hidden"); }
+function fmt(t) { t = Math.round(t); const h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = t%60;
+  return (h ? h + ":" + String(m).padStart(2,"0") : m) + ":" + String(s).padStart(2,"0"); }
+function ytAt(t) {
+  const v = lastResult.video; if (!v.id || !/youtu/.test(v.webpage_url || "")) return null;
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(v.id)}&t=${Math.max(0, Math.floor(t))}s`;
+}
+
+function render(r) {
+  show("#results");
+  const v = r.video, st = r.stats;
+  $("#video").innerHTML = (v.thumbnail ? `<img src="${esc(v.thumbnail)}" alt="">` : "") +
+    `<div><h2>${esc(v.title)}</h2><div class="hint">${esc(v.uploader)} · ${esc(st.duration_fmt)}</div></div>`;
+  const sure = r.songs.filter((s) => s.confidence !== "niedrig");
+  const unsure = r.songs.filter((s) => s.confidence === "niedrig");
+  const color = {}; r.songs.forEach((s, i) => color[s.title + s.artist] = COLORS[i % COLORS.length]);
+
+  $("#timeline").innerHTML = r.songs.flatMap((s) => s.segments.map((g) =>
+    `<span title="${esc(s.title)} – ${esc(s.artist)} (${esc(g.label)})" style="left:${100*g.start/st.duration}%;width:${Math.max(.4,100*(g.end-g.start)/st.duration)}%;background:${color[s.title+s.artist]}${s.confidence==="niedrig"?";opacity:.35":""}"></span>`)).join("");
+  $("#tlend").textContent = st.duration_fmt;
+
+  $("#songcount").textContent = sure.length === 1 ? "1 Song gefunden" : `${sure.length} Songs gefunden`;
+  $("#songs").innerHTML = sure.length ? sure.map((s) => songHtml(s, color)).join("")
+    : `<div class="empty">Keine sicheren Treffer. Tipp: „Gründlich“ wählen${$("#ai").disabled ? "" : " und KI-Stimmentrennung einschalten"}, oder unten die Videobeschreibung prüfen.</div>`;
+  if (unsure.length) { show("#unsure"); $("#unsuresum").textContent = `Unsichere Einzeltreffer (${unsure.length})`;
+    $("#unsuresongs").innerHTML = unsure.map((s) => songHtml(s, color)).join(""); } else hide("#unsure");
+
+  const credits = r.credits.filter((c) => !c.promo);
+  if (credits.length) { show("#credits"); $("#creditlist").innerHTML = credits.map((c) =>
+    `<div class="credit">${c.platform ? `<span class="badge plat">${esc(c.platform)}</span> ` : ""}${esc(c.text)}
+     ${c.urls.map((u) => ` <a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join("")}</div>`).join(""); }
+  else hide("#credits");
+
+  $("#stats").textContent = `${st.windows} Ausschnitte analysiert (alle ${st.step} s), ${st.matched} mit Treffer · ` +
+    `Dienste: ${st.providers.join(", ")} · Varianten: ${st.variants.map((x) => ({music:"KI-Musikspur",mix:"Original",side:"Stereo-Trick"}[x])).join(", ")} · ` +
+    `${st.elapsed} s` + (st.errors ? ` · ${st.errors} fehlgeschlagene Anfragen` : "");
+}
+
+function songHtml(s, color) {
+  const c = color[s.title + s.artist];
+  const cover = s.cover ? `<img class="cover" src="${esc(s.cover)}" alt="">`
+    : `<div class="cover" style="background:${c}">${esc((s.title||"?")[0])}</div>`;
+  const times = s.segments.map((g) => { const u = ytAt(g.start);
+    return u ? `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener" title="Im Video ansehen">▶ ${esc(g.label)}</a>`
+             : `<span class="chip">${esc(g.label)}</span>`; }).join("");
+  const links = [];
+  if (s.direct_url) links.push(`<a href="${esc(s.direct_url)}" target="_blank" rel="noopener"><b>Direkt-Link (Beschreibung)</b></a>`);
+  if (s.shazam_url) links.push(`<a href="${esc(s.shazam_url)}" target="_blank" rel="noopener">Shazam</a>`);
+  if (s.apple_url) links.push(`<a href="${esc(s.apple_url)}" target="_blank" rel="noopener">Apple Music</a>`);
+  const a = (l, txt) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(txt)}</a>`;
+  const own = s.links.find((l) => s.platform && s.platform.startsWith(l.label));
+  if (own && !s.direct_url) links.push("<b>" + a(own, "Auf " + own.label + " suchen") + "</b>");
+  s.links.filter((l) => l.label === "Spotify" || l.label === "YouTube").forEach((l) => links.push(a(l, l.label)));
+  const others = s.links.filter((l) => l !== own && l.label !== "Spotify" && l.label !== "YouTube");
+  links.push(`<details class="more"><summary>${own ? "Andere Plattformen" : "Plattform suchen"}</summary>${others.map((l) => a(l, l.label)).join(" · ")}</details>`);
+  const meta = [s.label && "Label: " + s.label, s.album && "Album: " + s.album, s.released, s.isrc && "ISRC " + s.isrc,
+                s.song_offset != null && "Stelle im Song ≈ " + fmt(s.song_offset)].filter(Boolean).map(esc).join(" · ");
+  return `<div class="song">${cover}
+    <div><div class="title">${esc(s.title)}</div><div class="artist">${esc(s.artist)}</div>
+      <div class="chips">${times}</div>
+      ${meta ? `<div class="meta">${meta}</div>` : ""}
+      <div class="links">${links.join(" · ")}</div></div>
+    <div class="side">
+      <span class="badge plat ${s.platform ? "" : "unknown"}" title="${s.platform_source ? "erkannt über " + esc(s.platform_source) : "Plattform nicht eindeutig, nutze die Such-Links"}">${esc(s.platform || "Plattform unbekannt")}</span>
+      <span class="hint conf-${s.confidence}">Sicherheit: ${esc(s.confidence)} (${s.hits}×)</span>
+      ${s.in_description ? `<span class="hint conf-hoch">✓ in Beschreibung</span>` : ""}
+      <button type="button" class="hint" onclick="copyText(${esc(JSON.stringify(s.title + " – " + s.artist))}).then(() => { this.textContent = 'Kopiert ✓'; })">Kopieren</button>
+    </div></div>`;
+}
+
+const native = () => window.pywebview && window.pywebview.api;
+window.addEventListener("pywebviewready", () => show("#pick"));
+$("#pick").addEventListener("click", async () => {
+  const p = await native().pick_file(); if (p) { $("#url").value = p; $("#url").focus(); }
+});
+document.querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click", async () => {
+  if (!jobId) return;
+  if (native()) {
+    const path = await native().save_export(jobId, b.dataset.exp);
+    if (path) { const t = b.textContent; b.textContent = "Gespeichert ✓"; setTimeout(() => b.textContent = t, 1800); }
+  } else location.href = `/api/job/${jobId}/${b.dataset.exp}`;
+}));
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select(); let ok = false; try { ok = document.execCommand("copy"); } catch {}
+  ta.remove(); return ok;
+}
+$("#copy").addEventListener("click", async () => {
+  if (!lastResult) return;
+  const txt = lastResult.songs.filter((s) => s.confidence !== "niedrig").map((s) =>
+    `${s.title} – ${s.artist}${s.platform ? " (" + s.platform + ")" : ""} @ ${s.segments.map((g) => g.label).join(", ")}`).join("\n");
+  await copyText(txt || "Keine Songs gefunden");
+  $("#copy").textContent = "Kopiert ✓"; setTimeout(() => $("#copy").textContent = "Liste kopieren", 1500);
+});
+</script>
+</body>
+</html>
