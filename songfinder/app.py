@@ -20,6 +20,11 @@ def _redirect_output() -> None:
             pass
 
 
+# Manche Seiten zeigen eingebetteten Browsern eine „Browser nicht unterstützt“-Seite
+SAFARI_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+             "(KHTML, like Gecko) Version/18.0 Safari/605.1.15")
+
+
 class Api:
     """Wird im Fenster als ``window.pywebview.api`` bereitgestellt."""
 
@@ -49,6 +54,18 @@ class Api:
             return None
         Path(path).write_text(body, encoding="utf-8")
         return path
+
+    def open_window(self, url: str, title: str = "Song Finder") -> bool:
+        """Öffnet eine Musik-Library (z. B. Epidemic Sound) in einem eigenen App-Fenster.
+
+        Anmeldungen bleiben gespeichert, Downloads landen über den Sichern-Dialog im Downloads-Ordner.
+        """
+        import webview
+
+        if not str(url).startswith("https://"):
+            return False
+        webview.create_window(str(title)[:80], url, width=1200, height=850, min_size=(600, 500))
+        return True
 
     def pick_file(self) -> str | None:
         return self._dialog(
@@ -105,7 +122,12 @@ def main() -> None:
             "Song Finder", url, js_api=api, width=1060, height=820, min_size=(420, 560),
             background_color="#f6f6f4",
         )
-        webview.start()
+        from .paths import data_dir
+
+        storage = data_dir() / "browser"
+        storage.mkdir(exist_ok=True)
+        # private_mode=False: Logins (z. B. bei Epidemic Sound) bleiben über Neustarts erhalten
+        webview.start(private_mode=False, storage_path=str(storage), user_agent=SAFARI_UA)
     except Exception:
         # Kein eingebettetes Browserfenster möglich → normaler Browser
         traceback.print_exc()

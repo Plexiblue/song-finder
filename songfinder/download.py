@@ -51,7 +51,7 @@ def download(url: str, workdir: Path, progress: ProgressFn | None = None,
             progress(d.get("downloaded_bytes", 0) / total, "Tonspur wird heruntergeladen …")
 
     opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=m4a]/bestaudio/best",  # m4a spielt das App-Fenster direkt ab
         "outtmpl": str(workdir / "source.%(ext)s"),
         "noplaylist": True,
         "quiet": True,

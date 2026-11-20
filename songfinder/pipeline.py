@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Callable
 
 from . import audio
-from .platforms import credit_matches, parse_description, platform_from_label, search_links
+from .platforms import (credit_matches, parse_description, platform_from_label, platform_rank,
+                        search_links)
 from .recognize import (Match, Recognizer, ShazamBlocked, ShazamRecognizer, audd_enterprise,
                         build_recognizers)
 
@@ -198,8 +199,20 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
         })
         stats["providers"] = (["YouTube"] + (["AudD"] if audd_token else [])
                               + (["Shazam"] if opts.use_shazam else []))
+        # Tonspur zum Anhören in der App behalten
+        playback = None
+        try:
+            from .paths import data_dir
+
+            if is_file and src_path.suffix.lower() in audio.PLAYABLE:
+                playback = src_path
+            else:
+                playback = audio.keep_for_playback(src_path, data_dir() / "audio")
+        except Exception as exc:
+            print(f"Tonspur zum Anhören nicht gespeichert: {exc}")
         meta_out = {k: v for k, v in meta.items() if k != "description"}
-        return {"video": meta_out, "songs": songs, "credits": credits, "stats": stats}
+        return {"video": meta_out, "songs": songs, "credits": credits, "stats": stats,
+                "_playback": str(playback) if playback else None}
     finally:
         if not opts.keep_files:
             shutil.rmtree(workdir, ignore_errors=True)
@@ -221,6 +234,7 @@ def _youtube_only(source: str, opts: Options, st: "Stages", t0: float, music_fou
             if s["platform"]:
                 s["direct_url"] = next((u for u in c["urls"]
                                         if s["platform"].split()[0].lower() in u.lower()), None)
+    songs = sort_songs(songs)
     stats = {
         "windows": 0, "shazam_windows": 0, "silent": 0, "matched": 0, "requests": 0, "errors": 0,
         "error_samples": [], "warning": None, "rate_limited": 0,
@@ -277,7 +291,13 @@ def merge_youtube(songs: list[dict], yt_music: list[dict]) -> list[dict]:
     for s in songs:
         s.setdefault("youtube", False)
         s.setdefault("license", None)
-    return songs
+    return sort_songs(songs)
+
+
+def sort_songs(songs: list[dict]) -> list[dict]:
+    """Epidemic Sound zuerst, dann Lickd, andere Libraries, Unbekannt; darin sichere vor unsicheren."""
+    return sorted(songs, key=lambda s: (platform_rank(s.get("platform")),
+                                        s.get("confidence") == "niedrig", s.get("first_seen", 0)))
 
 
 async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], order: list[str],

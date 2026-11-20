@@ -36,8 +36,19 @@ PLATFORMS: list[Platform] = [
     Platform("Chillhop", "chillhop.com", ("chillhop",), "Kostenlos"),
 ]
 
-# Plattformen, auf denen wir bei jedem Song eine Suche anbieten
-SEARCH_PLATFORMS = ["Epidemic Sound", "Artlist", "Lickd", "Uppbeat", "Soundstripe", "Musicbed"]
+# Reihenfolge = Wichtigkeit: Epidemic Sound zuerst, dann Lickd, dann andere Libraries
+PRIORITY = ["Epidemic Sound", "Lickd", "Artlist", "Musicbed", "Soundstripe", "Uppbeat",
+            "PremiumBeat", "Envato Elements / AudioJungle", "Motion Array", "Storyblocks", "Pond5",
+            "Audio Network", "Musicvine", "Monstercat (Gold)", "StreamBeats", "NoCopyrightSounds",
+            "Chillhop"]
+# Diese drei werden bei jedem Song direkt als Knopf angeboten, der Rest unter „Weitere“
+MAIN_LIBRARIES = ["Epidemic Sound", "Lickd", "Artlist"]
+MORE_LIBRARIES = ["Musicbed", "Soundstripe", "Uppbeat", "PremiumBeat", "Envato Elements / AudioJungle"]
+
+
+def platform_rank(name: str | None) -> int:
+    return PRIORITY.index(name) if name in PRIORITY else len(PRIORITY)
+
 
 _BY_NAME = {p.name: p for p in PLATFORMS}
 
@@ -52,19 +63,24 @@ def platform_from_label(*texts: str | None) -> Platform | None:
     return None
 
 
+# Direkte Suche auf der Plattform-Website (statt Umweg über Google)
+DIRECT_SEARCH = {
+    "Epidemic Sound": "https://www.epidemicsound.com/music/search/?term={q}",
+}
+
+
 def search_links(title: str, artist: str) -> list[dict]:
+    """Suche nach dem Song in den Musik-Libraries (keine Streamingdienste)."""
     q = f"{title} {artist}".strip()
     links = []
-    for name in SEARCH_PLATFORMS:
+    for name in MAIN_LIBRARIES + MORE_LIBRARIES:
         p = _BY_NAME[name]
-        links.append({
-            "label": name,
-            # Google-Seitensuche funktioniert zuverlässig, auch wenn Plattformen ihre
-            # internen Such-URLs ändern.
-            "url": f"https://www.google.com/search?q={quote_plus(f'site:{p.domain} {q}')}",
-        })
-    links.append({"label": "Spotify", "url": f"https://open.spotify.com/search/{quote_plus(q)}"})
-    links.append({"label": "YouTube", "url": f"https://www.youtube.com/results?search_query={quote_plus(q)}"})
+        if name in DIRECT_SEARCH:
+            url = DIRECT_SEARCH[name].format(q=quote_plus(q))
+        else:
+            # Google-Seitensuche: zuverlässig, auch wenn Plattformen ihre Such-URLs ändern
+            url = f"https://www.google.com/search?q={quote_plus(f'site:{p.domain} {q}')}"
+        links.append({"label": name, "url": url, "main": name in MAIN_LIBRARIES})
     return links
 
 

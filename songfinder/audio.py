@@ -56,6 +56,32 @@ def to_wav(src: Path, dst: Path, sr: int = SR, channels: int = 2) -> Path:
     return dst
 
 
+PLAYABLE = {".m4a", ".mp4", ".mov", ".mp3", ".aac", ".wav"}
+
+
+def keep_for_playback(src: Path, cache_dir: Path, keep: int = 5) -> Path:
+    """Legt die Tonspur zum Anhören in der App ab (nur die letzten ``keep`` Analysen)."""
+    import shutil as _sh
+    import uuid
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    dst = cache_dir / f"{uuid.uuid4().hex[:12]}.m4a"
+    if src.suffix.lower() == ".m4a":
+        _sh.copy2(src, dst)
+    else:
+        cmd = [ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+               "-vn", "-ac", "2", "-c:a", "aac", "-b:a", "128k", str(dst)]
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        proc = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags,
+                              encoding="utf-8", errors="replace")
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg (Wiedergabe): {proc.stderr.strip()[-300:]}")
+    old = sorted(cache_dir.glob("*.m4a"), key=lambda p: p.stat().st_mtime, reverse=True)[keep:]
+    for p in old:
+        p.unlink(missing_ok=True)
+    return dst
+
+
 def to_mp3(src: Path, dst: Path) -> Path:
     """Kompakte Mono-MP3 für den Upload zu AudD (15 min ≈ 7 MB)."""
     cmd = [ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),

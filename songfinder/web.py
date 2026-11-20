@@ -91,7 +91,10 @@ def _run_job(job_id: str, source: str, opts: Options) -> None:
         job["partial"] = data
 
     try:
-        job["result"] = analyze(source, opts, progress, on_partial=partial)
+        result = analyze(source, opts, progress, on_partial=partial)
+        job["audio_path"] = result.pop("_playback", None)  # lokaler Pfad bleibt auf dem Server
+        result["playable"] = bool(job["audio_path"])
+        job["result"] = result
         job["state"], job["pct"], job["msg"] = "done", 100, "Fertig"
     except Exception as exc:
         traceback.print_exc()
@@ -158,7 +161,7 @@ def job(job_id: str):
     j = JOBS.get(job_id)
     if not j:
         return jsonify({"error": "Unbekannter Auftrag"}), 404
-    return jsonify({k: v for k, v in j.items() if k != "source"})
+    return jsonify({k: v for k, v in j.items() if k not in ("source", "audio_path")})
 
 
 def export_body(job_id: str, fmt: str) -> tuple[str, str, str] | None:
@@ -177,6 +180,13 @@ def export_body(job_id: str, fmt: str) -> tuple[str, str, str] | None:
 
 @app.get("/api/job/<job_id>/<fmt>")
 def export(job_id: str, fmt: str):
+    if fmt == "audio":  # Tonspur zum Anhören (mit Spulen dank Range-Anfragen)
+        from flask import send_file
+
+        path = (JOBS.get(job_id) or {}).get("audio_path")
+        if not path:
+            abort(404)
+        return send_file(path, mimetype="audio/mp4", conditional=True)
     out = export_body(job_id, fmt)
     if not out:
         return jsonify({"error": "Kein Ergebnis"}), 404
