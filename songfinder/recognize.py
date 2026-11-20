@@ -172,6 +172,53 @@ def parse_shazam(answer: dict) -> Match | None:
 # AudD (kostenpflichtig, https://audd.io)
 # --------------------------------------------------------------------------- #
 
+# Bedeutung der AudD-Fehlercodes laut offiziellem SDK (pypi: audd, errors.py)
+AUDD_CODE_HINTS = {
+    900: "Token ungültig", 901: "Token fehlt oder ungültig", 903: "Token ungültig",
+    902: "Limit erreicht (Kontingent oder Limit pro Datei)",
+    904: "Diese Funktion ist für deinen Token nicht freigeschaltet",
+    905: "Diese Funktion ist für deinen Token nicht freigeschaltet",
+    300: "Audiodatei nicht lesbar", 400: "Audiodatei nicht lesbar", 500: "Audiodatei nicht lesbar",
+    19: "Zugriff gesperrt", 31337: "Zugriff gesperrt",
+}
+
+
+class AudDError(RuntimeError):
+    """Fehler von AudD – mit Code und AudDs eigener Meldung (nicht übersetzt/verfälscht)."""
+
+    def __init__(self, code: int | None, message: str):
+        self.code = code
+        self.server_message = message
+        hint = AUDD_CODE_HINTS.get(code or 0)
+        text = f"AudD meldet: {message}" + (f" (Code {code}: {hint})" if hint else f" (Code {code})" if code else "")
+        super().__init__(text)
+
+    @property
+    def is_auth(self) -> bool:
+        return self.code in (900, 901, 903)
+
+
+def audd_raise_for_error(body) -> None:
+    if not isinstance(body, dict):
+        raise AudDError(None, "unerwartete Antwort")
+    if body.get("status") != "error":
+        return
+    err = body.get("error")
+    if isinstance(err, dict):
+        code = err.get("error_code")
+        try:
+            code = int(code)
+        except (TypeError, ValueError):
+            code = None
+        if code == 51 and body.get("result") is not None:  # nur Hinweis auf veralteten Parameter
+            return
+        raise AudDError(code, str(err.get("error_message") or "unbekannter Fehler"))
+    raise AudDError(None, str(err or "unbekannter Fehler"))
+
+
+AUDD_API_URL = "https://api.audd.io/"
+
+
 class AuddRecognizer(Recognizer):
     name = "AudD"
 
@@ -187,11 +234,9 @@ class AuddRecognizer(Recognizer):
         form.add_field("api_token", self.token)
         form.add_field("return", "apple_music,spotify")
         form.add_field("file", wav, filename="clip.wav", content_type="audio/wav")
-        async with self._session.post("https://api.audd.io/", data=form) as resp:
+        async with self._session.post(AUDD_API_URL, data=form) as resp:
             data = await resp.json(content_type=None)
-        if data.get("status") != "success":
-            err = (data.get("error") or {}).get("error_message", "unbekannter Fehler")
-            raise RuntimeError(f"AudD: {err}")
+        audd_raise_for_error(data)
         r = data.get("result")
         if not r:
             return None
@@ -287,12 +332,6 @@ def build_recognizers(keys: dict | None, on_wait=None) -> list[Recognizer]:
 
 AUDD_ENTERPRISE_URL = "https://enterprise.audd.io/"
 
-AUDD_ERRORS = {
-    900: "AudD-Token ist ungültig.",
-    901: "AudD-Token fehlt oder ist ungültig.",
-    902: "AudD-Kontingent aufgebraucht – bitte im AudD-Dashboard aufladen.",
-    903: "AudD-Token ist ungültig.",
-}
 
 
 def _offset_seconds(offset) -> float | None:
@@ -318,16 +357,7 @@ async def audd_enterprise(token: str, audio_path, progress=None) -> list[tuple[f
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(AUDD_ENTERPRISE_URL, data=form) as resp:
             body = await resp.json(content_type=None)
-    if not isinstance(body, dict):
-        raise RuntimeError("AudD: unerwartete Antwort")
-    if body.get("status") == "error":
-        err = body.get("error") or {}
-        code = err.get("error_code") if isinstance(err, dict) else None
-        msg = AUDD_ERRORS.get(code) or (err.get("error_message") if isinstance(err, dict) else str(err))
-        if code == 51 and body.get("result") is not None:  # nur Hinweis auf veralteten Parameter
-            pass
-        else:
-            raise RuntimeError(f"AudD: {msg}")
+    audd_raise_for_error(body)
     out: list[tuple[float, float, Match]] = []
     for chunk in body.get("result") or []:
         if not isinstance(chunk, dict):
@@ -347,4 +377,34 @@ async def audd_enterprise(token: str, audio_path, progress=None) -> list[tuple[f
                 album=s.get("album"), label=s.get("label"), released=s.get("release_date"),
                 isrc=s.get("isrc"), url=s.get("song_link"), extra={"score": s.get("score")},
             )))
+    return out
+
+
+async def audd_check(token: str) -> dict:
+    """Testet den Token an beiden AudD-Schnittstellen mit einem 12-s-Testton (kostet 2 Anfragen)."""
+    import io
+
+    import numpy as np
+    import soundfile as sf
+
+    t = np.arange(16000 * 12) / 16000
+    buf = io.BytesIO()
+    sf.write(buf, (np.sin(2 * np.pi * 440 * t) * 0.3).astype(np.float32), 16000, format="WAV")
+    wav = buf.getvalue()
+    out = {}
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for key, url in (("standard", AUDD_API_URL), ("enterprise", AUDD_ENTERPRISE_URL)):
+            form = aiohttp.FormData()
+            form.add_field("api_token", token)
+            form.add_field("file", wav, filename="test.wav", content_type="audio/wav")
+            try:
+                async with session.post(url, data=form) as resp:
+                    body = await resp.json(content_type=None)
+                audd_raise_for_error(body)
+                out[key] = {"ok": True}
+            except AudDError as exc:
+                out[key] = {"ok": False, "code": exc.code, "message": str(exc)}
+            except Exception as exc:
+                out[key] = {"ok": False, "code": None, "message": f"Keine Verbindung zu AudD: {exc}"}
     return out

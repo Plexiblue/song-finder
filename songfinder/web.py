@@ -134,6 +134,18 @@ def _update_info() -> dict:
         return {}
 
 
+@app.post("/api/audd/check")
+def audd_token_check():
+    import asyncio
+
+    from .recognize import audd_check
+
+    token = ((request.get_json(force=True, silent=True) or {}).get("token") or "").strip()
+    if not token:
+        return jsonify({"error": "Bitte zuerst einen Token eintragen."}), 400
+    return jsonify(asyncio.run(audd_check(token)))
+
+
 @app.post("/api/analyze")
 def start():
     data = request.get_json(force=True) or {}

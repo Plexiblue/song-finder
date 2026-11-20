@@ -12,7 +12,7 @@ from typing import Callable
 from . import audio
 from .platforms import (credit_matches, parse_description, platform_from_label, platform_rank,
                         search_links)
-from .recognize import (Match, Recognizer, ShazamBlocked, ShazamRecognizer, audd_enterprise,
+from .recognize import (AudDError, Match, Recognizer, ShazamBlocked, ShazamRecognizer, audd_enterprise,
                         build_recognizers)
 
 MODES = {  # Schrittweite zwischen zwei 12-s-Ausschnitten
@@ -145,37 +145,58 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
         # 3) AudD: ganze Datei in einem Rutsch
         hits: list[Hit] = []
         audd_info = None
+        audd_windows = False  # AudD Abschnitt für Abschnitt (wenn der Komplett-Scan nicht geht)
+        audd_error: Exception | None = None
         if audd_token:
             st.report("audd", 0.1, "Profi-Scan (AudD) läuft – die ganze Tonspur wird analysiert …")
             try:
                 mp3 = audio.to_mp3(src_path, workdir / "upload.mp3")
                 for start, end, m in asyncio.run(audd_enterprise(audd_token, mp3)):
                     hits.append(Hit(start, end, "mix", m))
-                audd_info = f"{len(hits)} Treffer"
+                audd_info = f"Komplett-Scan, {len(hits)} Treffer"
+            except AudDError as exc:
+                print(f"AudD-Komplett-Scan fehlgeschlagen: {exc}")
+                if exc.is_auth:
+                    if not meta.get("yt_music"):
+                        raise RecognitionError(f"Letzter Fehler: {exc}") from exc
+                    audd_error = exc
+                    audd_info = str(exc)
+                    exc = None
+                if exc is not None:
+                    audd_windows = True
+                    audd_info = f"Komplett-Scan nicht möglich ({exc}) → Abschnitt für Abschnitt"
             except Exception as exc:
-                audd_info = f"Fehler: {exc}"
-                print(f"AudD-Scan fehlgeschlagen: {exc}")
+                print(f"AudD-Komplett-Scan fehlgeschlagen: {exc}")
+                audd_windows = True
+                audd_info = f"Komplett-Scan nicht möglich ({exc}) → Abschnitt für Abschnitt"
             st.report("audd", 1, "Profi-Scan fertig")
+        if audd_windows:
+            window_keys["audd_token"] = audd_token
 
         # 4) Shazam nur dort, wo noch nichts erkannt wurde
         covered = [(h.start, h.end) for h in hits]
-        todo = [w for w in windows if not _is_covered(w, covered)] if opts.use_shazam else []
+        todo = ([w for w in windows if not _is_covered(w, covered)]
+                if (opts.use_shazam or audd_windows) else [])
         order = (["music"] if music else []) + ["mix"] + (["side"] if opts.use_side else [])
-        st.report("recognize", 0, f"{len(todo)} Stellen werden mit Shazam geprüft …"
+        who = " + ".join(n for n, on in (("Shazam", opts.use_shazam), ("AudD", audd_windows)) if on)
+        st.report("recognize", 0, f"{len(todo)} Stellen werden mit {who} geprüft …"
                   if todo else "Alles erkannt")
         try:
             more, stats = asyncio.run(_recognize_all(src, todo, order, window_keys,
-                                                     lambda f, m: st.report("recognize", f, m)))
+                                                     lambda f, m: st.report("recognize", f, m),
+                                                     use_shazam=opts.use_shazam))
         except RecognitionError as exc:
             if not (hits or meta.get("yt_music")):
                 raise
             # YouTube/AudD haben schon geliefert → Ergebnis trotzdem zeigen
             more = []
-            stats = {"silent": 0, "matched": 0, "requests": 0, "errors": 1, "providers": ["Shazam"],
+            detail = str(exc).split("Letzter Fehler:", 1)[-1].strip()
+            stats = {"silent": 0, "matched": 0, "requests": 0, "errors": 1, "providers": [],
                      "error_samples": [str(exc)[:300]], "rate_limited": 0,
-                     "warning": "Shazam war nicht erreichbar – die Liste stammt nur aus "
-                                + ("YouTube und AudD." if hits and meta.get("yt_music")
-                                   else "dem AudD-Scan." if hits else "YouTubes Musik-Angaben (ohne Zeitstempel).")}
+                     "warning": "Die Ton-Analyse wurde abgebrochen – die Liste stammt nur aus "
+                                + ("YouTube und dem AudD-Scan" if hits and meta.get("yt_music")
+                                   else "dem AudD-Scan" if hits else "YouTubes Musik-Angaben (ohne Zeitstempel)")
+                                + f". Grund: {detail}"}
         hits = sorted(hits + more, key=lambda h: h.start)
 
         # 5) Zusammenführen
@@ -197,6 +218,8 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
             "audio_analyzed": True,
             "elapsed": round(time.time() - t0, 1),
         })
+        if audd_error and not stats.get("warning"):
+            stats["warning"] = f"AudD konnte nicht genutzt werden – {audd_error}"
         stats["providers"] = (["YouTube"] + (["AudD"] if audd_token else [])
                               + (["Shazam"] if opts.use_shazam else []))
         # Tonspur zum Anhören in der App behalten
@@ -301,7 +324,8 @@ def sort_songs(songs: list[dict]) -> list[dict]:
 
 
 async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], order: list[str],
-                         keys: dict, report: Callable[[float, str], None]) -> tuple[list[Hit], dict]:
+                         keys: dict, report: Callable[[float, str], None],
+                         use_shazam: bool = True) -> tuple[list[Hit], dict]:
     done = 0
     hits: list[Hit] = []
 
@@ -328,6 +352,16 @@ async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], or
             return m
         except ShazamBlocked:
             raise
+        except AudDError as exc:
+            if exc.code in (900, 901, 902, 903, 904, 905, 19, 31337):  # hilft auch kein 2. Versuch
+                raise RecognitionError(f"Letzter Fehler: {exc}") from exc
+            stats["errors"] += 1
+            consecutive_errors += 1
+            if len(stats["error_samples"]) < 5:
+                stats["error_samples"].append(str(exc)[:300])
+            if consecutive_errors >= 8:
+                raise RecognitionError(f"Letzter Fehler: {exc}") from exc
+            return None
         except Exception as exc:  # Netzwerkfehler etc. – weitermachen
             stats["errors"] += 1
             consecutive_errors += 1
@@ -348,7 +382,7 @@ async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], or
                 # Erfolgreichste Variante zuerst → weniger Anfragen
                 ranked = sorted(variants.items(), key=lambda kv: -wins[kv[0]])
                 found: tuple[str, Match] | None = None
-                for vname, sig in ranked:
+                for vname, sig in (ranked if use_shazam else []):
                     if m := await ask(shazam, sig):
                         found = (vname, m)
                         break

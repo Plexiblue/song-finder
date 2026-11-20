@@ -166,7 +166,9 @@
             <option value="">keine</option><option>chrome</option><option>firefox</option>
             <option>edge</option><option>safari</option><option>brave</option><option>opera</option>
           </select></label>
-        <label>AudD API-Token – Profi-Scan, schnell &amp; ohne Shazam-Limits<input id="audd_token" type="password" placeholder="optional (audd.io)"></label>
+        <label>AudD API-Token – Profi-Scan, schnell &amp; ohne Shazam-Limits<input id="audd_token" type="password" placeholder="optional (audd.io)">
+          <span class="row" style="gap:8px;margin-top:4px"><button type="button" class="btn" id="auddcheck">Token prüfen</button><span class="hint">kostet 2 Anfragen</span></span>
+          <span id="auddresult" class="hint"></span></label>
         <label>ACRCloud Host<input id="acr_host" type="text" placeholder="identify-eu-west-1.acrcloud.com"></label>
         <label>ACRCloud Access Key<input id="acr_key" type="password" placeholder="optional"></label>
         <label>ACRCloud Access Secret<input id="acr_secret" type="password" placeholder="optional"></label>
@@ -292,6 +294,7 @@ $("#form").addEventListener("submit", async (e) => {
   const url = $("#url").value.trim();
   if (!url) return;
   $("#go").disabled = true;
+  KEYS.forEach((k) => store.set(k, $("#" + k).value.trim()));  // Eingaben sofort sichern
   audioEl.pause(); hide("#player"); audioJob = null;
   show("#progress"); hide("#error"); hide("#results");
   setProgress(0, "Starte …");
@@ -455,6 +458,27 @@ document.querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click
     if (path) { const t = b.textContent; b.textContent = "Gespeichert ✓"; setTimeout(() => b.textContent = t, 1800); }
   } else location.href = `/api/job/${jobId}/${b.dataset.exp}?k=${encodeURIComponent(KEY)}`;
 }));
+// ---- AudD-Token prüfen ----
+$("#auddcheck").addEventListener("click", async () => {
+  const token = $("#audd_token").value.trim();
+  const out = $("#auddresult");
+  if (!token) { out.textContent = "Bitte zuerst einen Token eintragen."; return; }
+  store.set("audd_token", token);
+  out.textContent = "Prüfe …"; $("#auddcheck").disabled = true;
+  try {
+    const r = await api("/api/audd/check", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({ token }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || "Fehler");
+    const line = (name, x) => `<div>${x.ok ? "✅" : "❌"} ${name}${x.ok ? " funktioniert" : ": " + esc(x.message)}</div>`;
+    let summary = "";
+    if (d.standard.ok && d.enterprise.ok) summary = "Alles bereit – das Video wird in einem Rutsch analysiert.";
+    else if (d.standard.ok) summary = "Dein Token funktioniert. Videos werden Abschnitt für Abschnitt analysiert (gleicher Preis, etwas langsamer).";
+    else summary = "Der Token funktioniert gerade nicht – siehe Meldung von AudD.";
+    out.innerHTML = line("Normale Erkennung", d.standard) + line("Komplett-Scan", d.enterprise) + `<div><b>${esc(summary)}</b></div>`;
+  } catch (err) { out.textContent = err.message; }
+  $("#auddcheck").disabled = false;
+});
+
 // ---- Anhören in der App ----
 const audioEl = $("#audio");
 let audioJob = null, segEnd = null, playingBtn = null;

@@ -9,6 +9,10 @@ def friendly_error(exc: Exception) -> str:
         return ("Shazam hat gerade zu viele Anfragen von deinem Internetanschluss bekommen und macht "
                 "eine Pause. Bitte 15–30 Minuten warten und es dann erneut versuchen – am besten mit "
                 "„Schnell“, das braucht die wenigsten Anfragen.")
+    if isinstance(exc, RecognitionError) and "AudD meldet" in str(exc):
+        detail = str(exc).split("Letzter Fehler:", 1)[-1].strip()
+        return ("AudD konnte das Video nicht analysieren.\n\n" + detail +
+                "\n\nTipp: Unter „Erweitert“ → „Token prüfen“ siehst du, was dein Token kann.")
     if isinstance(exc, RecognitionError):
         detail = str(exc).split("Letzter Fehler:", 1)[-1].strip()[:300]
         return ("Die Musik-Erkennung (Shazam) ist gerade nicht erreichbar. Bitte Internetverbindung "
