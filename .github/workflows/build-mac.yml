@@ -28,6 +28,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Versionsnummer setzen
+        run: |
+          sed -i '' "s/^VERSION = .*/VERSION = \"$APP_VERSION\"/" appinfo.py
+          sed -i '' "s/^__version__ = .*/__version__ = \"$APP_VERSION\"/" songfinder/__init__.py
+          cat appinfo.py | grep VERSION
+
       - name: Abhängigkeiten installieren
         run: |
           python -m pip install --upgrade pip
@@ -62,7 +68,11 @@ jobs:
     needs: build
     if: always()
     runs-on: ubuntu-latest
+    env:
+      APP_VERSION: 1.0.${{ github.run_number }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: out
@@ -71,12 +81,30 @@ jobs:
       - name: Prüfen, ob etwas gebaut wurde
         run: ls -la out && test -n "$(ls out/*.dmg 2>/dev/null)"
 
+      - name: Update-Paket für die App (nur Programmcode)
+        run: |
+          sed -i "s/^__version__ = .*/__version__ = \"$APP_VERSION\"/" songfinder/__init__.py
+          RUNTIME=$(grep '^RUNTIME' appinfo.py | grep -o '[0-9]*')
+          find songfinder -name '__pycache__' -prune -exec rm -rf {} +
+          zip -qr "out/songfinder-$APP_VERSION.zip" songfinder
+          SHA=$(sha256sum "out/songfinder-$APP_VERSION.zip" | cut -d' ' -f1)
+          REPO="${{ github.repository }}"
+          cat > out/update.json <<JSON
+          {"version": "$APP_VERSION", "min_runtime": $RUNTIME, "sha256": "$SHA",
+           "url": "https://github.com/$REPO/releases/download/v$APP_VERSION/songfinder-$APP_VERSION.zip",
+           "page": "https://github.com/$REPO/releases/latest"}
+          JSON
+          cat out/update.json
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: Song Finder 1.0.${{ github.run_number }}
           make_latest: true
-          files: out/*.dmg
+          files: |
+            out/*.dmg
+            out/*.zip
+            out/update.json
           body: |
             ## Download
             * **Apple Silicon (M1, M2, M3, M4 …)** → `SongFinder-Mac-AppleSilicon.dmg`

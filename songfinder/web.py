@@ -6,9 +6,8 @@ import threading
 import traceback
 import uuid
 import webbrowser
-from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request
 
 from . import __version__, audio
 from .cli import keys_from_env
@@ -16,7 +15,6 @@ from .errors import friendly_error
 from .export import to_csv, to_text
 from .pipeline import Options, analyze
 
-STATIC = Path(__file__).parent / "static"
 app = Flask(__name__, static_folder=None)
 JOBS: dict[str, dict] = {}
 
@@ -40,7 +38,11 @@ def _run_job(job_id: str, source: str, opts: Options) -> None:
 
 @app.get("/")
 def index():
-    return send_from_directory(STATIC, "index.html")
+    # pkgutil funktioniert auch, wenn der Code aus einem Update-ZIP geladen wurde
+    import pkgutil
+
+    html = pkgutil.get_data("songfinder", "static/index.html")
+    return Response(html, mimetype="text/html; charset=utf-8")
 
 
 @app.get("/api/status")
@@ -54,7 +56,17 @@ def status():
         "app": FROZEN,
         "ytdlp": updater.status.get("versions", {}).get("yt-dlp"),
         "log": str(log_file()) if FROZEN else None,
+        "update": _update_info(),
     })
+
+
+def _update_info() -> dict:
+    import os
+
+    try:
+        return json.loads(os.environ.get("SONGFINDER_UPDATE_INFO") or "{}")
+    except Exception:
+        return {}
 
 
 @app.post("/api/analyze")
