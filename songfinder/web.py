@@ -69,6 +69,7 @@ def start():
         mode=data.get("mode", "normal"),
         use_ai=data.get("ai", "auto"),
         use_side=bool(data.get("side", True)),
+        use_shazam=bool(data.get("shazam", False)),
         keys=keys,
         cookies_browser=data.get("cookies") or None,
     )

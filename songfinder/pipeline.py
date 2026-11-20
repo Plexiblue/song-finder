@@ -30,6 +30,7 @@ class Options:
     mode: str = "normal"
     use_ai: str = "auto"  # "auto" | "an" | "aus"
     use_side: bool = True
+    use_shazam: bool = False  # kostenlos, aber langsam und blockiert schnell → nur auf Wunsch
     keys: dict = field(default_factory=dict)
     keep_files: bool = False
     cookies_browser: str | None = None
@@ -83,10 +84,11 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
     """
     opts = opts or Options()
     step = MODES.get(opts.mode, MODES["normal"])
-    want_ai = opts.use_ai == "an" or (opts.use_ai == "auto" and audio.demucs_available())
-    if opts.use_ai == "an" and not audio.demucs_available():
-        raise RuntimeError("KI-Trennung ist nicht installiert. Bitte 'pip install -r requirements-ki.txt' ausführen.")
     audd_token = (opts.keys or {}).get("audd_token")
+    need_audio = bool(audd_token or opts.use_shazam)
+    want_ai = need_audio and (opts.use_ai == "an" or (opts.use_ai == "auto" and audio.demucs_available()))
+    if need_audio and opts.use_ai == "an" and not audio.demucs_available():
+        raise RuntimeError("KI-Trennung ist nicht installiert. Bitte 'pip install -r requirements-ki.txt' ausführen.")
     window_keys = {k: v for k, v in (opts.keys or {}).items() if k != "audd_token"}
 
     st = Stages(progress, {"download": 12, "prepare": 3, "ai": 35 if want_ai else 0,
@@ -103,10 +105,17 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
                                   "webpage_url": info.get("webpage_url")},
                         "youtube_music": [enrich_youtube_song(x) for x in songs]})
 
+    local = Path(source.strip().strip('"'))
+    is_file = local.exists() and local.is_file()
+    if not (audd_token or opts.use_shazam):
+        if is_file:
+            raise RuntimeError("Für Videodateien braucht es eine Audio-Erkennung: unter „Erweitert“ einen "
+                               "AudD-Token eintragen oder Shazam einschalten.")
+        return _youtube_only(source, opts, st, t0, music_found)
+
     try:
         # 1) Quelle holen (+ YouTube-Musikabschnitt)
-        local = Path(source.strip().strip('"'))
-        if local.exists() and local.is_file():
+        if is_file:
             meta = {"id": None, "title": local.stem, "uploader": "", "duration": None,
                     "description": "", "webpage_url": str(local), "thumbnail": None,
                     "yt_track": None, "yt_artist": None, "yt_music": []}
@@ -149,7 +158,7 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
 
         # 4) Shazam nur dort, wo noch nichts erkannt wurde
         covered = [(h.start, h.end) for h in hits]
-        todo = [w for w in windows if not _is_covered(w, covered)]
+        todo = [w for w in windows if not _is_covered(w, covered)] if opts.use_shazam else []
         order = (["music"] if music else []) + ["mix"] + (["side"] if opts.use_side else [])
         st.report("recognize", 0, f"{len(todo)} Stellen werden mit Shazam geprüft …"
                   if todo else "Alles erkannt")
@@ -184,17 +193,44 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
             "variants": order,
             "audd": audd_info,
             "youtube_section": len(meta.get("yt_music") or []),
+            "audio_analyzed": True,
             "elapsed": round(time.time() - t0, 1),
         })
-        if audd_token:
-            stats["providers"] = ["YouTube", "AudD"] + [p for p in stats["providers"] if p != "AudD"]
-        else:
-            stats["providers"] = ["YouTube"] + stats["providers"]
+        stats["providers"] = (["YouTube"] + (["AudD"] if audd_token else [])
+                              + (["Shazam"] if opts.use_shazam else []))
         meta_out = {k: v for k, v in meta.items() if k != "description"}
         return {"video": meta_out, "songs": songs, "credits": credits, "stats": stats}
     finally:
         if not opts.keep_files:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _youtube_only(source: str, opts: Options, st: "Stages", t0: float, music_found) -> dict:
+    """Schnellmodus: nur YouTubes Musik-Angaben + Videobeschreibung, kein Download."""
+    from .download import video_info
+
+    st.report("download", 0.3, "YouTube-Musikangaben werden gelesen …")
+    meta = video_info(source.strip(), cookies_browser=opts.cookies_browser, on_music=music_found)
+    credits = parse_description(meta.get("description", ""))
+    songs = merge_youtube([], meta.get("yt_music") or [])
+    for s in songs:  # Beschreibung bestätigt? Liefert evtl. Plattform + Direktlink
+        if c := credit_matches(s["title"], s["artist"], credits):
+            s["in_description"] = True
+            if not s["platform"] and c.get("platform"):
+                s["platform"], s["platform_source"] = c["platform"], "Videobeschreibung"
+            if s["platform"]:
+                s["direct_url"] = next((u for u in c["urls"]
+                                        if s["platform"].split()[0].lower() in u.lower()), None)
+    stats = {
+        "windows": 0, "shazam_windows": 0, "silent": 0, "matched": 0, "requests": 0, "errors": 0,
+        "error_samples": [], "warning": None, "rate_limited": 0,
+        "duration": meta.get("duration") or 0, "duration_fmt": fmt_time(meta.get("duration")),
+        "step": 0, "mode": opts.mode, "ai_used": False, "variants": [], "audd": None,
+        "youtube_section": len(meta.get("yt_music") or []), "providers": ["YouTube"],
+        "audio_analyzed": False, "elapsed": round(time.time() - t0, 1),
+    }
+    meta_out = {k: v for k, v in meta.items() if k != "description"}
+    return {"video": meta_out, "songs": songs, "credits": credits, "stats": stats}
 
 
 def _is_covered(w: audio.Window, covered: list[tuple[float, float]]) -> bool:

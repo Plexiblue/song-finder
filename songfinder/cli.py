@@ -24,6 +24,8 @@ def main() -> None:
                    help="schnell = 15 s Raster, normal = 9 s, gruendlich = 5 s")
     p.add_argument("--ki", choices=["auto", "an", "aus"], default="auto",
                    help="KI-Stimmentrennung (Demucs) verwenden")
+    p.add_argument("--shazam", action="store_true",
+                   help="Zusätzlich Shazam fragen (kostenlos, aber langsam; Shazam blockiert schnell)")
     p.add_argument("--json", type=Path, help="Ergebnis zusätzlich als JSON speichern")
     p.add_argument("--csv", type=Path, help="Ergebnis zusätzlich als CSV (Excel) speichern")
     p.add_argument("--web", action="store_true", help="Web-Oberfläche starten")
@@ -39,7 +41,8 @@ def main() -> None:
         sys.stderr.flush()
 
     try:
-        result = analyze(a.quelle, Options(mode=a.modus, use_ai=a.ki, keys=keys_from_env()), progress)
+        result = analyze(a.quelle, Options(mode=a.modus, use_ai=a.ki, keys=keys_from_env(),
+                                         use_shazam=a.shazam), progress)
     except KeyboardInterrupt:
         sys.exit(130)
     except Exception as exc:

@@ -1,22 +1,23 @@
-name: Video testen (echt, mit YouTube + Shazam)
+name: Video testen (echt)
 
+# Standard: nur YouTube-Musikangaben (kein Shazam). Shazam nur, wenn ausdrücklich gewünscht.
 on:
   workflow_dispatch:
     inputs:
       url:
         description: "YouTube-Link"
         required: true
-      modus:
-        description: "schnell | normal | gruendlich"
-        default: "schnell"
+      shazam:
+        description: "Zusätzlich Shazam fragen (langsam, kann blockieren)"
+        type: boolean
+        default: false
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     env:
       VIDEO_URL: ${{ inputs.url }}
-      MODUS: ${{ inputs.modus }}
       AUDD_TOKEN: ${{ secrets.AUDD_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -25,22 +26,10 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - name: Analyse
-        run: python -m songfinder "$VIDEO_URL" --modus "$MODUS" --ki aus --json result.json
-      - name: YouTube-Musikabschnitt (Rohdaten)
-        if: always()
         run: |
-          python - <<'PY'
-          import json, os
-          from yt_dlp import YoutubeDL
-          from songfinder.download import _js_runtimes
-          from songfinder.youtube_music import fetch_music_section
-          with YoutubeDL({"quiet": True, "js_runtimes": _js_runtimes()}) as ydl:
-              info = ydl.extract_info(os.environ["VIDEO_URL"], download=False)
-              print(json.dumps(fetch_music_section(ydl, info["id"]), ensure_ascii=False, indent=1))
-          PY
-      - uses: actions/upload-artifact@v4
+          EXTRA=""
+          if [ "${{ inputs.shazam }}" = "true" ]; then EXTRA="--shazam --modus schnell"; fi
+          python -m songfinder "$VIDEO_URL" $EXTRA --ki aus --json result.json
+      - name: Ergebnis (JSON)
         if: always()
-        with:
-          name: ergebnis
-          path: result.json
-          if-no-files-found: ignore
+        run: test -f result.json && python -c "import json;r=json.load(open('result.json'));print(json.dumps({'yt_music':r['video'].get('yt_music'),'songs':[(s['title'],s['artist'],s['platform'],s.get('license')) for s in r['songs']],'credits':r['credits'],'stats':r['stats']},ensure_ascii=False,indent=1))" || true

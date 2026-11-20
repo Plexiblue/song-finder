@@ -107,7 +107,7 @@
       <button type="button" id="pick" class="hidden" title="Videodatei vom Computer wählen">📁 Datei</button>
       <button class="primary" id="go" type="submit">Songs finden</button>
     </form>
-    <div class="row opts">
+    <div class="row opts hidden" id="audioopts">
       <span>Gründlichkeit:</span>
       <div class="seg" id="mode">
         <button type="button" data-v="schnell">Schnell</button>
@@ -119,7 +119,10 @@
     <p class="hint" id="aihint"></p>
     <details>
       <summary>Erweitert</summary>
-      <div class="row" style="margin-top:12px"><label class="tog"><input type="checkbox" id="side" checked> Stimme per Stereo-Trick ausblenden (empfohlen)</label></div>
+      <div class="row" style="margin-top:12px;flex-direction:column;align-items:flex-start;gap:8px">
+        <label class="tog"><input type="checkbox" id="shazam"> Zusätzlich mit Shazam suchen <span class="hint">(kostenlos, aber langsam – Shazam blockiert schnell)</span></label>
+        <label class="tog"><input type="checkbox" id="side" checked> Stimme per Stereo-Trick ausblenden <span class="hint">(für Audio-Analyse)</span></label>
+      </div>
       <div class="grid">
         <label>Browser-Cookies (bei YouTube-„Bot“-Fehler)
           <select id="cookies">
@@ -190,8 +193,17 @@ const store = {
   get(k) { try { return localStorage.getItem("sf_" + k) || ""; } catch { return ""; } },
   set(k, v) { try { localStorage.setItem("sf_" + k, v); } catch {} },
 };
+try { $("#shazam").checked = localStorage.getItem("sf_shazam") === "1"; } catch {}
+$("#shazam").addEventListener("change", (e) => { try { localStorage.setItem("sf_shazam", e.target.checked ? "1" : "0"); } catch {} });
+function updateAudioOpts() {
+  const on = $("#shazam").checked || $("#audd_token").value.trim() !== "";
+  $("#audioopts").classList.toggle("hidden", !on);
+}
+$("#shazam").addEventListener("change", updateAudioOpts);
+$("#audd_token").addEventListener("input", updateAudioOpts);
 KEYS.forEach((k) => { $("#" + k).value = store.get(k); $("#" + k).addEventListener("change", (e) => store.set(k, e.target.value)); });
 if (store.get("mode")) setMode(store.get("mode"));
+updateAudioOpts();
 
 function setMode(v) {
   mode = v; store.set("mode", v);
@@ -222,7 +234,7 @@ $("#form").addEventListener("submit", async (e) => {
   try {
     const r = await fetch("/api/analyze", { method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ url, mode, ai: $("#ai").disabled ? "aus" : ($("#ai").checked ? "an" : "aus"),
-                             side: $("#side").checked, cookies: $("#cookies").value, keys }) });
+                             side: $("#side").checked, shazam: $("#shazam").checked, cookies: $("#cookies").value, keys }) });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || "Fehler");
     jobId = d.job; poll();
@@ -272,11 +284,17 @@ function render(r) {
   $("#timeline").innerHTML = r.songs.flatMap((s) => s.segments.map((g) =>
     `<span title="${esc(s.title)} – ${esc(s.artist)} (${esc(g.label)})" style="left:${100*g.start/st.duration}%;width:${Math.max(.4,100*(g.end-g.start)/st.duration)}%;background:${color[s.title+s.artist]}${s.confidence==="niedrig"?";opacity:.35":""}"></span>`)).join("");
   $("#tlend").textContent = st.duration_fmt;
+  const noAudio = st.audio_analyzed === false;
+  $("#timeline").classList.toggle("hidden", noAudio);
+  document.querySelector(".tl-scale").classList.toggle("hidden", noAudio);
 
   if (st.warning) { show("#warning"); $("#warning").textContent = "⚠️ " + st.warning; } else hide("#warning");
   $("#songcount").textContent = sure.length === 1 ? "1 Song gefunden" : `${sure.length} Songs gefunden`;
   $("#songs").innerHTML = sure.length ? sure.map((s) => songHtml(s, color)).join("")
-    : `<div class="empty">Keine sicheren Treffer. Tipp: „Gründlich“ wählen${$("#ai").disabled ? "" : " und KI-Stimmentrennung einschalten"}, oder unten die Videobeschreibung prüfen.</div>`;
+    : st.audio_analyzed === false
+      ? `<div class="empty">YouTube nennt für dieses Video keine Songs. Das passiert, wenn die Musik nicht bei YouTube registriert ist.<br>
+         Für eine Analyse des Tons: unter „Erweitert“ einen <b>AudD-Token</b> eintragen (zuverlässig, mit Zeitstempeln) oder <b>Shazam</b> einschalten (kostenlos, langsam). Unten stehen außerdem die Musik-Angaben aus der Videobeschreibung.</div>`
+      : `<div class="empty">Keine sicheren Treffer. Tipp: „Gründlich“ wählen${$("#ai").disabled ? "" : " und KI-Stimmentrennung einschalten"}, oder unten die Videobeschreibung prüfen.</div>`;
   if (unsure.length) { show("#unsure"); $("#unsuresum").textContent = `Unsichere Einzeltreffer (${unsure.length})`;
     $("#unsuresongs").innerHTML = unsure.map((s) => songHtml(s, color)).join(""); } else hide("#unsure");
 
@@ -288,7 +306,8 @@ function render(r) {
 
   $("#stats").textContent = (st.youtube_section ? `YouTube nennt ${st.youtube_section} Songs · ` : "") +
     (st.audd ? `AudD: ${st.audd} · ` : "") +
-    `Shazam: ${st.shazam_windows ?? st.windows} Stellen geprüft, ${st.matched} mit Treffer · ` +
+    (st.shazam_windows ? `Shazam: ${st.shazam_windows} Stellen geprüft, ${st.matched} mit Treffer · ` : "") +
+    (st.audio_analyzed === false ? "Nur YouTube-Angaben (Ton nicht analysiert) · " : "") +
     `Dauer ${st.elapsed} s` + (st.errors ? ` · ${st.errors} fehlgeschlagene Anfragen` : "");
 }
 
@@ -296,7 +315,7 @@ function songHtml(s, color) {
   const c = color[s.title + s.artist];
   const cover = s.cover ? `<img class="cover" src="${esc(s.cover)}" alt="">`
     : `<div class="cover" style="background:${c}">${esc((s.title||"?")[0])}</div>`;
-  const times = !s.segments.length ? `<span class="chip" title="YouTube nennt keine Zeitstempel und die Audio-Analyse hat den Song nicht gefunden">Zeit unbekannt</span>` : s.segments.map((g) => { const u = ytAt(g.start);
+  const times = !s.segments.length ? (lastResult.stats.audio_analyzed === false ? "" : `<span class="chip" title="YouTube nennt keine Zeitstempel und die Audio-Analyse hat den Song nicht gefunden">Zeit unbekannt</span>`) : s.segments.map((g) => { const u = ytAt(g.start);
     return u ? `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener" title="Im Video ansehen">▶ ${esc(g.label)}</a>`
              : `<span class="chip">${esc(g.label)}</span>`; }).join("");
   const links = [];

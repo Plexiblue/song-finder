@@ -28,7 +28,10 @@ def to_text(result: dict) -> str:
         lines.append(f"{i:2d}. {s['title']} – {s['artist']}")
         lines.append(f"    Plattform: {s['platform'] or 'unbekannt'}"
                      + (f"  (Label: {s['label']})" if s["label"] else ""))
-        lines.append(f"    Zeit: {times}   Sicherheit: {s['confidence']} ({s['hits']} Treffer)")
+        if s["segments"]:
+            lines.append(f"    Zeit: {times}   Sicherheit: {s['confidence']} ({s['hits']} Treffer)")
+        if s.get("youtube"):
+            lines.append("    ✓ laut YouTube" + (f" (Lizenz: {s['license']})" if s.get("license") else ""))
         if s["direct_url"]:
             lines.append(f"    Link: {s['direct_url']}")
         elif s["shazam_url"]:
@@ -39,6 +42,11 @@ def to_text(result: dict) -> str:
         for c in music_credits:
             lines.append(f"  • {c['text']}" + (f"  [{c['platform']}]" if c["platform"] else "")
                          + ("  " + " ".join(c["urls"]) if c["urls"] else ""))
-    lines += ["", f"{st['windows']} Ausschnitte, {st['matched']} mit Treffer, "
-              f"{st['requests']} Anfragen, {st['errors']} Fehler, {st['elapsed']} s"]
+    if st.get("audio_analyzed") is False:
+        lines += ["", f"Quelle: YouTube-Musikangaben ({st.get('youtube_section', 0)} Songs), Ton nicht analysiert"]
+    else:
+        lines += ["", f"{st['windows']} Ausschnitte, {st['matched']} mit Treffer, "
+                  f"{st['requests']} Anfragen, {st['errors']} Fehler, {st['elapsed']} s"]
+    if st.get("warning"):
+        lines.append("Hinweis: " + st["warning"])
     return "\n".join(lines)

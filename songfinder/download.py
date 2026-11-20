@@ -101,3 +101,66 @@ def download(url: str, workdir: Path, progress: ProgressFn | None = None,
         "yt_music": yt_music,
     }
     return meta, path
+
+
+def video_info(url: str, cookies_browser: str | None = None, on_music=None) -> dict:
+    """Nur Infos + YouTubes Musik-Abschnitt, ohne Download (dauert wenige Sekunden).
+
+    Funktioniert auch, wenn YouTube den Download per „Bot-Prüfung“ sperrt: die Musik-Angaben
+    stehen in der Videoseite selbst.
+    """
+    from . import updater
+
+    updater.wait()
+    import yt_dlp
+
+    from .youtube_music import fetch_music_section
+
+    opts = {
+        "quiet": True, "no_warnings": True, "noplaylist": True,
+        "skip_download": True, "ignore_no_formats_error": True,  # Bot-Sperre der Streams ignorieren
+        "js_runtimes": _js_runtimes(), "retries": 3,
+    }
+    if cookies_browser:
+        opts["cookiesfrombrowser"] = (cookies_browser,)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info: dict = {}
+        info_error = None
+        try:
+            info = ydl.extract_info(url, download=False, process=False) or {}
+        except Exception as exc:
+            info_error = exc
+        vid = info.get("id") or video_id_from_url(url)
+        if not vid:
+            if info_error:
+                raise info_error
+            raise RuntimeError("Das ist kein gültiger YouTube-Link.")
+        yt_music: list[dict] = []
+        try:
+            yt_music = fetch_music_section(ydl, vid)
+        except Exception as exc:
+            print(f"YouTube-Musikabschnitt nicht lesbar: {type(exc).__name__}: {exc}")
+            if info_error:
+                raise info_error
+        info.setdefault("id", vid)
+        if on_music:
+            on_music(yt_music, info)
+    return {
+        "id": vid,
+        "title": info.get("title") or "",
+        "uploader": info.get("uploader") or info.get("channel") or "",
+        "duration": info.get("duration"),
+        "description": info.get("description") or "",
+        "webpage_url": info.get("webpage_url") or f"https://www.youtube.com/watch?v={vid}",
+        "thumbnail": info.get("thumbnail") or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+        "yt_track": info.get("track"),
+        "yt_artist": info.get("artist"),
+        "yt_music": yt_music,
+    }
+
+
+def video_id_from_url(url: str) -> str | None:
+    import re
+
+    m = re.search(r"(?:v=|youtu\.be/|shorts/|embed/|live/)([A-Za-z0-9_-]{11})", url)
+    return m.group(1) if m else None
