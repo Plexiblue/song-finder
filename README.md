@@ -43,9 +43,9 @@ Neue App-Versionen baut GitHub automatisch bei jeder Änderung im `main`-Branch
 
 | Modus      | Raster | Dauer für ein 15-min-Video* | Wann?                                   |
 |------------|--------|-----------------------------|-----------------------------------------|
-| Schnell    | 15 s   | ~1 min                      | Musik läuft lange am Stück              |
-| Normal     | 9 s    | ~2 min                      | Standard                                |
-| Gründlich  | 5 s    | ~3–5 min                    | viele kurze Einspieler / Übergänge      |
+| Schnell    | 15 s   | ~1–2 min                    | Musik läuft lange am Stück              |
+| Normal     | 10 s   | ~2–4 min                    | Standard                                |
+| Gründlich  | 5 s    | ~5–8 min                    | viele kurze Einspieler / Übergänge      |
 
 \* ohne KI-Trennung. Die KI braucht auf einem normalen Laptop zusätzlich etwa 20–30 % der
 Videolänge (mit NVIDIA-Grafikkarte viel schneller).
@@ -62,8 +62,10 @@ Videolänge (mit NVIDIA-Grafikkarte viel schneller).
   sie über Lickd lizenziert hat, sieht man dem Audio nicht an. Nutze dafür den Link „Auf Lickd suchen“.
 * Stark geschnittene, beschleunigte oder hochgepitchte Musik wird schlechter erkannt.
 * Zeitangaben sind auf ca. ±5 s genau (Raster der Ausschnitte).
-* Shazam wird über eine inoffizielle Schnittstelle angesprochen (Bibliothek `shazamio`). Bei sehr vielen
-  Anfragen kann Shazam kurz bremsen; das Tool wartet dann automatisch.
+* Shazam wird über eine inoffizielle Schnittstelle angesprochen (Bibliothek `shazamio`). Shazam erlaubt
+  nur eine begrenzte Zahl Anfragen pro Internetanschluss. Das Tool fragt deshalb nacheinander, macht bei
+  „zu viele Anfragen“ automatisch Pausen (15 s bis 2 min) und wird dann langsamer. Blockiert Shazam
+  dauerhaft, zeigt es die bis dahin gefundenen Songs; nach 15–30 Minuten geht es wieder.
 
 ## Probleme?
 

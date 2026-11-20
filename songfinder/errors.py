@@ -5,6 +5,10 @@ from __future__ import annotations
 def friendly_error(exc: Exception) -> str:
     from .pipeline import RecognitionError
 
+    if isinstance(exc, RecognitionError) and "keine Anfragen an" in str(exc):
+        return ("Shazam hat gerade zu viele Anfragen von deinem Internetanschluss bekommen und macht "
+                "eine Pause. Bitte 15–30 Minuten warten und es dann erneut versuchen – am besten mit "
+                "„Schnell“, das braucht die wenigsten Anfragen.")
     if isinstance(exc, RecognitionError):
         detail = str(exc).split("Letzter Fehler:", 1)[-1].strip()[:300]
         return ("Die Musik-Erkennung (Shazam) ist gerade nicht erreichbar. Bitte Internetverbindung "

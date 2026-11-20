@@ -83,6 +83,7 @@
   .credit:first-of-type { border-top: 0; }
   .credit a { color: var(--accent); }
   .empty { color: var(--muted); padding: 10px 0; }
+  .warnbox { border-color: var(--warn); color: var(--warn); }
   .hidden { display: none !important; }
   @media (max-width: 600px) {
     .song { grid-template-columns: 44px 1fr; }
@@ -146,6 +147,7 @@
       <div id="timeline" class="timeline"></div>
       <div class="tl-scale"><span>0:00</span><span id="tlend"></span></div>
     </section>
+    <section class="card hidden warnbox" id="warning"></section>
     <section class="card">
       <div class="row" style="justify-content:space-between">
         <h2 style="margin:0;font-size:18px" id="songcount">Songs</h2>
@@ -258,6 +260,7 @@ function render(r) {
     `<span title="${esc(s.title)} – ${esc(s.artist)} (${esc(g.label)})" style="left:${100*g.start/st.duration}%;width:${Math.max(.4,100*(g.end-g.start)/st.duration)}%;background:${color[s.title+s.artist]}${s.confidence==="niedrig"?";opacity:.35":""}"></span>`)).join("");
   $("#tlend").textContent = st.duration_fmt;
 
+  if (st.warning) { show("#warning"); $("#warning").textContent = "⚠️ " + st.warning; } else hide("#warning");
   $("#songcount").textContent = sure.length === 1 ? "1 Song gefunden" : `${sure.length} Songs gefunden`;
   $("#songs").innerHTML = sure.length ? sure.map((s) => songHtml(s, color)).join("")
     : `<div class="empty">Keine sicheren Treffer. Tipp: „Gründlich“ wählen${$("#ai").disabled ? "" : " und KI-Stimmentrennung einschalten"}, oder unten die Videobeschreibung prüfen.</div>`;

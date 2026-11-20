@@ -71,25 +71,60 @@ class Recognizer:
 # Shazam (inoffizielle Schnittstelle über shazamio)
 # --------------------------------------------------------------------------- #
 
-class ShazamRecognizer(Recognizer):
-    name = "Shazam"
+class ShazamBlocked(RuntimeError):
+    """Shazam lehnt trotz langer Pausen weiterhin ab (Rate-Limit für diese IP-Adresse)."""
 
-    def __init__(self, min_interval: float = 0.6):
+
+class ShazamRecognizer(Recognizer):
+    """Fragt Shazam strikt nacheinander und passt das Tempo an.
+
+    Antwortet Shazam mit „zu viele Anfragen“ (HTTP 429), wird eine Pause eingelegt, die bei jeder
+    weiteren Ablehnung länger wird, und das Grundtempo dauerhaft gedrosselt.
+    """
+
+    name = "Shazam"
+    PAUSES = (15, 30, 60, 90, 120)  # Sekunden; danach gilt Shazam als blockiert
+
+    def __init__(self, min_interval: float = 1.0, on_wait=None):
         from aiohttp_retry import ExponentialRetry
         from shazamio import Shazam
         from shazamio.client import HTTPClient
 
+        # 429 behandeln wir selbst (mit echten Pausen); Serverfehler kurz wiederholen
         self._client = HTTPClient(
-            retry_options=ExponentialRetry(attempts=6, max_timeout=30,
-                                           statuses={429, 500, 502, 503, 504})
+            retry_options=ExponentialRetry(attempts=3, start_timeout=1, max_timeout=8,
+                                           statuses={500, 502, 503, 504})
         )
         self._shazam = Shazam(language="de-DE", endpoint_country="DE", http_client=self._client)
+        self.base_interval = min_interval
         self._limiter = RateLimiter(min_interval)
+        self._lock = asyncio.Lock()
+        self.on_wait = on_wait
+        self.rate_limited = 0
 
     async def recognize(self, wav: bytes) -> Match | None:
-        await self._limiter.wait()
-        answer = await self._shazam.recognize(wav)
-        return parse_shazam(answer)
+        from shazamio.exceptions import RateLimited
+
+        async with self._lock:  # nie zwei Anfragen gleichzeitig
+            for pause in (*self.PAUSES, None):
+                await self._limiter.wait()
+                try:
+                    answer = await self._shazam.recognize(wav)
+                except RateLimited:
+                    self.rate_limited += 1
+                    if pause is None:
+                        raise ShazamBlocked(
+                            "Shazam nimmt von deinem Internetanschluss gerade keine Anfragen mehr an.")
+                    # dauerhaft langsamer werden
+                    self._limiter.min_interval = min(8.0, self._limiter.min_interval * 1.7 + 0.5)
+                    if self.on_wait:
+                        self.on_wait(pause)
+                    await asyncio.sleep(pause)
+                    continue
+                # Nach Erfolg ganz langsam wieder schneller werden
+                self._limiter.min_interval = max(self.base_interval, self._limiter.min_interval * 0.97)
+                return parse_shazam(answer)
+        return None
 
     async def close(self) -> None:
         try:
@@ -229,10 +264,10 @@ class AcrCloudRecognizer(Recognizer):
             await self._session.close()
 
 
-def build_recognizers(keys: dict | None) -> list[Recognizer]:
+def build_recognizers(keys: dict | None, on_wait=None) -> list[Recognizer]:
     """Shazam ist immer dabei; AudD/ACRCloud nur, wenn Schlüssel vorhanden sind."""
     keys = keys or {}
-    recs: list[Recognizer] = [ShazamRecognizer()]
+    recs: list[Recognizer] = [ShazamRecognizer(on_wait=on_wait)]
     if keys.get("audd_token"):
         recs.append(AuddRecognizer(keys["audd_token"]))
     if keys.get("acr_host") and keys.get("acr_key") and keys.get("acr_secret"):

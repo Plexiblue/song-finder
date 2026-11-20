@@ -11,11 +11,11 @@ from typing import Callable
 
 from . import audio
 from .platforms import credit_matches, parse_description, platform_from_label, search_links
-from .recognize import Match, Recognizer, ShazamRecognizer, build_recognizers
+from .recognize import Match, Recognizer, ShazamBlocked, ShazamRecognizer, build_recognizers
 
 MODES = {  # Schrittweite zwischen zwei 12-s-Ausschnitten
     "schnell": 15.0,
-    "normal": 9.0,
+    "normal": 10.0,
     "gruendlich": 5.0,
 }
 
@@ -141,13 +141,22 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
 
 async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], order: list[str],
                          keys: dict, report: Callable[[float, str], None]) -> tuple[list[Hit], dict]:
-    recognizers = build_recognizers(keys)
-    stats = {"windows": len(windows), "silent": 0, "matched": 0, "requests": 0, "errors": 0,
-             "providers": [r.name for r in recognizers], "error_samples": []}
-    hits: list[Hit] = []
     done = 0
+    hits: list[Hit] = []
+
+    def songs_found() -> int:
+        return len({h.match.key for h in hits})
+
+    def on_wait(seconds: int) -> None:
+        report(done / len(windows), f"Shazam bremst gerade – kurze Pause ({seconds} s), dann geht es weiter …")
+
+    recognizers = build_recognizers(keys, on_wait=on_wait)
+    shazam = next(r for r in recognizers if isinstance(r, ShazamRecognizer))
+    paid = [r for r in recognizers if not isinstance(r, ShazamRecognizer)]
+    stats = {"windows": len(windows), "silent": 0, "matched": 0, "requests": 0, "errors": 0,
+             "providers": [r.name for r in recognizers], "error_samples": [], "warning": None}
     consecutive_errors = 0
-    sem = asyncio.Semaphore(3)
+    wins = {v: 0 for v in order}  # welche Variante funktioniert bei diesem Video?
 
     async def ask(rec: Recognizer, sig) -> Match | None:
         nonlocal consecutive_errors
@@ -156,54 +165,58 @@ async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], or
             m = await rec.recognize(audio.wav_bytes(sig))
             consecutive_errors = 0
             return m
+        except ShazamBlocked:
+            raise
         except Exception as exc:  # Netzwerkfehler etc. – weitermachen
             stats["errors"] += 1
             consecutive_errors += 1
             if len(stats["error_samples"]) < 5:
                 stats["error_samples"].append(f"{rec.name}: {type(exc).__name__}: {exc}"[:300])
-            if consecutive_errors >= 12:
+            if consecutive_errors >= 8:
                 raise RecognitionError(
                     "Zu viele Fehler in Folge bei der Erkennung – besteht eine Internetverbindung? "
                     f"Letzter Fehler: {stats['error_samples'][-1]}") from exc
             return None
 
-    async def process(w: audio.Window) -> None:
-        nonlocal done
-        async with sem:
+    try:
+        for w in windows:
             variants = await asyncio.to_thread(src.variants, w, order)
             if not variants:
                 stats["silent"] += 1
             else:
+                # Erfolgreichste Variante zuerst → weniger Anfragen
+                ranked = sorted(variants.items(), key=lambda kv: -wins[kv[0]])
                 found: tuple[str, Match] | None = None
-                # Zuerst Shazam (kostenlos) auf allen Varianten …
-                for vname, sig in variants.items():
-                    for rec in recognizers:
-                        if isinstance(rec, ShazamRecognizer):
-                            if m := await ask(rec, sig):
-                                found = (vname, m)
-                                break
-                    if found:
+                for vname, sig in ranked:
+                    if m := await ask(shazam, sig):
+                        found = (vname, m)
                         break
-                # … dann kostenpflichtige Dienste nur auf der besten Variante.
-                if not found:
-                    vname, sig = next(iter(variants.items()))
-                    for rec in recognizers:
-                        if not isinstance(rec, ShazamRecognizer):
-                            if m := await ask(rec, sig):
-                                found = (vname, m)
-                                break
+                if not found and paid:  # kostenpflichtige Dienste nur auf der besten Variante
+                    vname, sig = ranked[0]
+                    for rec in paid:
+                        if m := await ask(rec, sig):
+                            found = (vname, m)
+                            break
                 if found:
+                    wins[found[0]] += 1
                     stats["matched"] += 1
                     hits.append(Hit(w.start, w.end, found[0], found[1]))
             done += 1
             report(done / len(windows),
-                   f"Erkenne Musik … {done}/{len(windows)} Ausschnitte · {len({h.match.key for h in hits})} Songs gefunden")
-
-    try:
-        await asyncio.gather(*(process(w) for w in windows))
+                   f"Erkenne Musik … {done}/{len(windows)} Ausschnitte · {songs_found()} Songs gefunden")
+    except ShazamBlocked:
+        if not hits:
+            raise RecognitionError(
+                "Shazam nimmt von deinem Internetanschluss gerade keine Anfragen an (zu viele Anfragen). "
+                "Letzter Fehler: Bitte 15–30 Minuten warten und dann mit „Schnell“ erneut versuchen.")
+        stats["warning"] = (
+            f"Shazam hat nach {fmt_time(windows[done].start)} gebremst – die Analyse wurde dort beendet. "
+            "Die Liste ist deshalb evtl. unvollständig. In 15–30 Minuten erneut versuchen.")
     finally:
         for r in recognizers:
             await r.close()
+    stats["rate_limited"] = shazam.rate_limited
+    stats["analyzed_until"] = windows[min(done, len(windows) - 1)].end if windows else 0
     hits.sort(key=lambda h: h.start)
     return hits, stats
 
