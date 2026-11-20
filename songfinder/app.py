@@ -86,9 +86,11 @@ def main() -> None:
     updater.start()
     quiet_server()
     server = make_server("127.0.0.1", 0, app, threaded=True)
-    url = f"http://127.0.0.1:{server.server_port}/"
+    from .web import ACCESS_KEY
+
+    url = f"http://127.0.0.1:{server.server_port}/?k={ACCESS_KEY}"
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Song Finder gestartet: {url}")
+    print(f"Song Finder gestartet auf Port {server.server_port}")  # Schlüssel nicht ins Protokoll
 
     try:
         import webview
@@ -214,11 +216,14 @@ def selftest(out_path: str) -> int:
         return f"{yt_dlp.version.__version__} aus {Path(yt_dlp.__file__).parent}"
 
     def web():
-        from .web import app
+        from .web import ACCESS_KEY, app
 
         c = app.test_client()
         assert c.get("/").status_code == 200
-        return c.get("/api/status").get_json()
+        assert c.get("/api/status").status_code == 403, "API ohne Schlüssel erreichbar"
+        assert c.get("/api/status", headers={"X-SF-Key": ACCESS_KEY},
+                     base_url="http://evil.example").status_code == 403, "fremder Host akzeptiert"
+        return c.get("/api/status", headers={"X-SF-Key": ACCESS_KEY}).get_json()
 
     def gui():
         import webview

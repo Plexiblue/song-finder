@@ -194,31 +194,44 @@ const KEYS = ["audd_token", "acr_host", "acr_key", "acr_secret", "cookies"];
 const COLORS = ["#4c6ef5","#f76707","#12b886","#e64980","#7950f2","#fab005","#15aabf","#82c91e","#fa5252","#be4bdb"];
 let mode = "normal", jobId = null, lastResult = null, timer = null;
 
+// Schlüssel dieses App-Starts (steht in der Fensteradresse) – ohne ihn lehnt der Server Anfragen ab
+const KEY = new URLSearchParams(location.search).get("k") || "";
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { ...(opts.headers || {}), "X-SF-Key": KEY } });
+const safeUrl = (u) => /^https?:\/\//i.test(String(u || "")) ? u : "#";
+
+// Einstellungen liegen in einer Datei im Benutzerordner (nur für dich lesbar), nicht im Browser
+let SETTINGS = {}, saveTimer = null;
 const store = {
-  get(k) { try { return localStorage.getItem("sf_" + k) || ""; } catch { return ""; } },
-  set(k, v) { try { localStorage.setItem("sf_" + k, v); } catch {} },
+  get(k) { return SETTINGS[k] ?? ""; },
+  set(k, v) {
+    SETTINGS[k] = v; clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => api("/api/settings", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(SETTINGS) }).catch(() => {}), 300);
+  },
 };
-try { $("#shazam").checked = localStorage.getItem("sf_shazam") === "1"; } catch {}
-$("#shazam").addEventListener("change", (e) => { try { localStorage.setItem("sf_shazam", e.target.checked ? "1" : "0"); } catch {} });
 function updateAudioOpts() {
   const on = $("#shazam").checked || $("#audd_token").value.trim() !== "";
   $("#audioopts").classList.toggle("hidden", !on);
 }
-$("#shazam").addEventListener("change", updateAudioOpts);
-$("#audd_token").addEventListener("input", updateAudioOpts);
-KEYS.forEach((k) => { $("#" + k).value = store.get(k); $("#" + k).addEventListener("change", (e) => store.set(k, e.target.value)); });
-if (store.get("mode")) setMode(store.get("mode"));
-updateAudioOpts();
-
 function setMode(v) {
   mode = v; store.set("mode", v);
   document.querySelectorAll("#mode button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
 }
+$("#shazam").addEventListener("change", (e) => { store.set("shazam", e.target.checked ? "1" : "0"); updateAudioOpts(); });
+$("#audd_token").addEventListener("input", updateAudioOpts);
+KEYS.forEach((k) => $("#" + k).addEventListener("change", (e) => store.set(k, e.target.value.trim())));
 document.querySelectorAll("#mode button").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.v)));
+$("#ai").addEventListener("change", (e) => store.set("ai", e.target.checked ? "1" : "0"));
 
 let STATUS = {};
-fetch("/api/status").then((r) => r.json()).then((s) => {
-  STATUS = s;
+async function init() {
+  try { SETTINGS = await (await api("/api/settings")).json() || {}; } catch { SETTINGS = {}; }
+  $("#shazam").checked = store.get("shazam") === "1";
+  KEYS.forEach((k) => { $("#" + k).value = store.get(k); });
+  if (store.get("mode")) setMode(store.get("mode"));
+  updateAudioOpts();
+
+  const s = STATUS = await (await api("/api/status")).json();
   const u = s.update || {};
   $("#version").textContent = "Version " + (u.running || s.version);
   if (u.updated && store.get("seen_version") !== u.running) {
@@ -227,7 +240,7 @@ fetch("/api/status").then((r) => r.json()).then((s) => {
     setTimeout(() => hide("#updnote"), 6000);
   } else if (u.full_update) {
     $("#updnote").innerHTML = `Neue App-Version ${esc(u.full_update.version)} verfügbar – diese braucht einmal eine Neuinstallation. ` +
-      `<a href="${esc(u.full_update.page || "https://github.com/Plexiblue/song-finder/releases/latest")}" target="_blank" rel="noopener">Download</a>`;
+      `<a href="${esc(safeUrl(u.full_update.page || "https://github.com/Plexiblue/song-finder/releases/latest"))}" target="_blank" rel="noopener">Download</a>`;
     show("#updnote");
   }
   if (s.ai_available) { $("#ai").checked = store.get("ai") !== "0"; $("#aihint").textContent = ""; }
@@ -236,8 +249,8 @@ fetch("/api/status").then((r) => r.json()).then((s) => {
     $("#ai").disabled = true; $("#aiwrap").style.opacity = .55;
     $("#aihint").innerHTML = "KI-Stimmentrennung ist nicht installiert. Optional mit <code>pip install -r requirements-ki.txt</code> nachrüsten, das hilft besonders bei viel Sprache über der Musik.";
   }
-});
-$("#ai").addEventListener("change", (e) => store.set("ai", e.target.checked ? "1" : "0"));
+}
+init();
 
 $("#form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -248,7 +261,7 @@ $("#form").addEventListener("submit", async (e) => {
   setProgress(0, "Starte …");
   const keys = {}; ["audd_token","acr_host","acr_key","acr_secret"].forEach((k) => keys[k] = $("#" + k).value);
   try {
-    const r = await fetch("/api/analyze", { method: "POST", headers: {"Content-Type": "application/json"},
+    const r = await api("/api/analyze", { method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ url, mode, ai: $("#ai").disabled ? "aus" : ($("#ai").checked ? "an" : "aus"),
                              side: $("#side").checked, shazam: $("#shazam").checked, cookies: $("#cookies").value, keys }) });
     const d = await r.json();
@@ -260,7 +273,7 @@ $("#form").addEventListener("submit", async (e) => {
 async function poll() {
   clearTimeout(timer);
   try {
-    const d = await (await fetch("/api/job/" + jobId)).json();
+    const d = await (await api("/api/job/" + jobId)).json();
     if (d.state === "running") { setProgress(d.pct, d.msg); renderPreview(d.partial); timer = setTimeout(poll, 800); return; }
     $("#go").disabled = false; hide("#progress"); hide("#preview"); $("#preview").innerHTML = "";
     if (d.state === "error") return fail(d.error);
@@ -317,7 +330,7 @@ function render(r) {
   const credits = r.credits.filter((c) => !c.promo);
   if (credits.length) { show("#credits"); $("#creditlist").innerHTML = credits.map((c) =>
     `<div class="credit">${c.platform ? `<span class="badge plat">${esc(c.platform)}</span> ` : ""}${esc(c.text)}
-     ${c.urls.map((u) => ` <a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join("")}</div>`).join(""); }
+     ${c.urls.map((u) => ` <a href="${esc(safeUrl(u))}" target="_blank" rel="noopener">${esc(u)}</a>`).join("")}</div>`).join(""); }
   else hide("#credits");
 
   $("#stats").textContent = (st.youtube_section ? `YouTube nennt ${st.youtube_section} Songs · ` : "") +
@@ -332,13 +345,13 @@ function songHtml(s, color) {
   const cover = s.cover ? `<img class="cover" src="${esc(s.cover)}" alt="">`
     : `<div class="cover" style="background:${c}">${esc((s.title||"?")[0])}</div>`;
   const times = !s.segments.length ? (lastResult.stats.audio_analyzed === false ? "" : `<span class="chip" title="YouTube nennt keine Zeitstempel und die Audio-Analyse hat den Song nicht gefunden">Zeit unbekannt</span>`) : s.segments.map((g) => { const u = ytAt(g.start);
-    return u ? `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener" title="Im Video ansehen">▶ ${esc(g.label)}</a>`
+    return u ? `<a class="chip" href="${esc(safeUrl(u))}" target="_blank" rel="noopener" title="Im Video ansehen">▶ ${esc(g.label)}</a>`
              : `<span class="chip">${esc(g.label)}</span>`; }).join("");
   const links = [];
-  if (s.direct_url) links.push(`<a href="${esc(s.direct_url)}" target="_blank" rel="noopener"><b>Direkt-Link (Beschreibung)</b></a>`);
-  if (s.shazam_url) links.push(`<a href="${esc(s.shazam_url)}" target="_blank" rel="noopener">Shazam</a>`);
-  if (s.apple_url) links.push(`<a href="${esc(s.apple_url)}" target="_blank" rel="noopener">Apple Music</a>`);
-  const a = (l, txt) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(txt)}</a>`;
+  if (s.direct_url) links.push(`<a href="${esc(safeUrl(s.direct_url))}" target="_blank" rel="noopener"><b>Direkt-Link (Beschreibung)</b></a>`);
+  if (s.shazam_url) links.push(`<a href="${esc(safeUrl(s.shazam_url))}" target="_blank" rel="noopener">Shazam</a>`);
+  if (s.apple_url) links.push(`<a href="${esc(safeUrl(s.apple_url))}" target="_blank" rel="noopener">Apple Music</a>`);
+  const a = (l, txt) => `<a href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(txt)}</a>`;
   const own = s.links.find((l) => s.platform && s.platform.startsWith(l.label));
   if (own && !s.direct_url) links.push("<b>" + a(own, "Auf " + own.label + " suchen") + "</b>");
   s.links.filter((l) => l.label === "Spotify" || l.label === "YouTube").forEach((l) => links.push(a(l, l.label)));
@@ -370,7 +383,7 @@ document.querySelectorAll("[data-exp]").forEach((b) => b.addEventListener("click
   if (native()) {
     const path = await native().save_export(jobId, b.dataset.exp);
     if (path) { const t = b.textContent; b.textContent = "Gespeichert ✓"; setTimeout(() => b.textContent = t, 1800); }
-  } else location.href = `/api/job/${jobId}/${b.dataset.exp}`;
+  } else location.href = `/api/job/${jobId}/${b.dataset.exp}?k=${encodeURIComponent(KEY)}`;
 }));
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch {}

@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import traceback
 import uuid
 import webbrowser
 
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, abort, jsonify, request
 
 from . import __version__, audio
 from .cli import keys_from_env
@@ -17,6 +18,67 @@ from .pipeline import Options, analyze
 
 app = Flask(__name__, static_folder=None)
 JOBS: dict[str, dict] = {}
+
+# Zufälliger Schlüssel pro App-Start. Nur das eigene App-Fenster kennt ihn (steht in dessen
+# Adresse). Webseiten im Browser können die App dadurch nicht fernsteuern.
+ACCESS_KEY = secrets.token_urlsafe(24)
+_LOCAL_HOSTS = {"127.0.0.1", "localhost"}
+SETTING_KEYS = {"audd_token", "acr_host", "acr_key", "acr_secret", "cookies", "mode", "ai",
+                "shazam", "seen_version"}
+
+
+@app.before_request
+def _guard():
+    # Schutz gegen „DNS-Rebinding“: nur Anfragen an 127.0.0.1/localhost annehmen
+    if (request.host or "").rsplit(":", 1)[0] not in _LOCAL_HOSTS:
+        abort(403)
+    if request.path.startswith("/api/"):
+        key = request.headers.get("X-SF-Key") or request.args.get("k") or ""
+        if not secrets.compare_digest(key, ACCESS_KEY):
+            abort(403)
+
+
+@app.after_request
+def _headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+def _settings_file():
+    from .paths import data_dir
+
+    return data_dir() / "settings.json"
+
+
+@app.get("/api/settings")
+def get_settings():
+    try:
+        return jsonify(json.loads(_settings_file().read_text(encoding="utf-8")))
+    except Exception:
+        return jsonify({})
+
+
+@app.post("/api/settings")
+def save_settings():
+    import os
+
+    data = request.get_json(force=True, silent=True) or {}
+    clean = {k: str(v)[:500] for k, v in data.items() if k in SETTING_KEYS and v is not None}
+    f = _settings_file()
+    tmp = f.with_suffix(".tmp")
+    # Datei nur für den eigenen Benutzer lesbar (enthält ggf. den AudD-Token)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(clean, fh)
+    os.replace(tmp, f)
+    try:
+        os.chmod(f, 0o600)
+    except OSError:
+        pass
+    return jsonify({"ok": True})
 
 
 def _run_job(job_id: str, source: str, opts: Options) -> None:
@@ -132,7 +194,7 @@ def quiet_server() -> None:
 
 
 def run(host: str = "127.0.0.1", port: int = 5123, open_browser: bool = True) -> None:
-    url = f"http://{host}:{port}"
+    url = f"http://{host}:{port}/?k={ACCESS_KEY}"
     print(f"\n  Song Finder läuft auf {url}\n  (Fenster offen lassen, Beenden mit Strg+C)\n")
     quiet_server()
     if open_browser:
