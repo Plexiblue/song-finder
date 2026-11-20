@@ -24,7 +24,7 @@ for f in stage.iterdir():
 datas = [(str(ROOT / "songfinder" / "static"), "songfinder/static")]
 binaries = [(str(stage / f"ffmpeg{SUFFIX}"), "bin"), (str(stage / f"deno{SUFFIX}"), "bin")]
 hidden = collect_submodules("songfinder") + collect_submodules("shazamio")
-for pkg in ("yt_dlp_ejs", "shazamio", "shazamio_core", "webview"):
+for pkg in ("yt_dlp_ejs", "shazamio", "shazamio_core", "webview", "certifi"):
     d, b, h = collect_all(pkg)
     datas += d; binaries += b; hidden += h
 for dist in ("yt-dlp", "yt-dlp-ejs", "shazamio", "pywebview"):

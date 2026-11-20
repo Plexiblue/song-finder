@@ -6,3 +6,4 @@ aiohttp>=3.9
 flask>=3.0
 numpy>=1.26
 soundfile>=0.12
+certifi>=2024.2.2

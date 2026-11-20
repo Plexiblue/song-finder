@@ -58,7 +58,23 @@ class Api:
         )
 
 
+def _use_bundled_certificates() -> None:
+    """Die gepackte App findet die macOS-Zertifikate nicht von selbst (Python nutzt nicht den
+    Schlüsselbund). Ohne das scheitern alle HTTPS-Verbindungen, die nicht – wie yt-dlp –
+    selbst certifi verwenden, z. B. die zu Shazam."""
+    import os
+
+    try:
+        import certifi
+
+        if not os.environ.get("SSL_CERT_FILE") or not os.path.isfile(os.environ["SSL_CERT_FILE"]):
+            os.environ["SSL_CERT_FILE"] = certifi.where()
+    except Exception:
+        traceback.print_exc()
+
+
 def main() -> None:
+    _use_bundled_certificates()
     if len(sys.argv) >= 3 and sys.argv[1] == "--selftest":
         sys.exit(selftest(sys.argv[2]))
     _redirect_output()
@@ -153,6 +169,38 @@ def selftest(out_path: str) -> int:
         s = asyncio.run(make_signature())
         return f"Varianten {sorted(v)}, Signatur {s.signature.samples} samples"
 
+    def certificates():
+        import os
+        import ssl
+
+        paths = ssl.get_default_verify_paths()
+        n = ssl.create_default_context().cert_store_stats()["x509_ca"]
+        if n == 0:
+            raise RuntimeError("keine CA-Zertifikate geladen")
+        return (f"{n} CA-Zertifikate, SSL_CERT_FILE={os.environ.get('SSL_CERT_FILE')}, "
+                f"OpenSSL-Standard={paths.openssl_cafile} (vorhanden: {os.path.isfile(paths.openssl_cafile)})")
+
+    def shazam_online():
+        import asyncio
+
+        import numpy as np
+
+        from . import audio
+        from .recognize import ShazamRecognizer
+
+        t = np.arange(audio.SR * 12) / audio.SR
+        clip = (np.sin(2 * np.pi * 440 * t) * 0.4).astype(np.float32)
+
+        async def ask():
+            rec = ShazamRecognizer()
+            try:
+                return await asyncio.wait_for(rec.recognize(audio.wav_bytes(clip)), 60)
+            finally:
+                await rec.close()
+
+        m = asyncio.run(ask())
+        return f"Shazam erreichbar, Antwort: {m.title + ' – ' + m.artist if m else 'kein Treffer (erwartet)'}"
+
     def update():
         from . import updater
 
@@ -178,7 +226,8 @@ def selftest(out_path: str) -> int:
         return getattr(webview, "__version__", "importiert")
 
     for name, fn in [("ffmpeg", ffmpeg), ("deno", deno), ("shazam-signatur", signature),
-                     ("update", update), ("yt-dlp", ytdlp), ("oberflaeche", web), ("pywebview", gui)]:
+                     ("zertifikate", certificates),
+                     ("shazam-online", shazam_online), ("update", update), ("yt-dlp", ytdlp), ("oberflaeche", web), ("pywebview", gui)]:
         check(name, fn)
     lines.append("SELFTEST " + ("BESTANDEN" if ok else "FEHLGESCHLAGEN"))
     Path(out_path).write_text("\n".join(lines), encoding="utf-8")

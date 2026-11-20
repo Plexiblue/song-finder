@@ -6,8 +6,9 @@ def friendly_error(exc: Exception) -> str:
     from .pipeline import RecognitionError
 
     if isinstance(exc, RecognitionError):
+        detail = str(exc).split("Letzter Fehler:", 1)[-1].strip()[:300]
         return ("Die Musik-Erkennung (Shazam) ist gerade nicht erreichbar. Bitte Internetverbindung "
-                "prüfen und es in ein paar Minuten noch einmal versuchen.")
+                f"prüfen und es in ein paar Minuten noch einmal versuchen.\n\nTechnische Ursache: {detail}")
     msg = str(exc)
     low = msg.lower()
     if "not a bot" in low or "sign in to confirm" in low:
