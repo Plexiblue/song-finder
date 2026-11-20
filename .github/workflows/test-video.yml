@@ -1,0 +1,46 @@
+name: Video testen (echt, mit YouTube + Shazam)
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "YouTube-Link"
+        required: true
+      modus:
+        description: "schnell | normal | gruendlich"
+        default: "schnell"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VIDEO_URL: ${{ inputs.url }}
+      MODUS: ${{ inputs.modus }}
+      AUDD_TOKEN: ${{ secrets.AUDD_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Analyse
+        run: python -m songfinder "$VIDEO_URL" --modus "$MODUS" --ki aus --json result.json
+      - name: YouTube-Musikabschnitt (Rohdaten)
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          from yt_dlp import YoutubeDL
+          from songfinder.download import _js_runtimes
+          from songfinder.youtube_music import fetch_music_section
+          with YoutubeDL({"quiet": True, "js_runtimes": _js_runtimes()}) as ydl:
+              info = ydl.extract_info(os.environ["VIDEO_URL"], download=False)
+              print(json.dumps(fetch_music_section(ydl, info["id"]), ensure_ascii=False, indent=1))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ergebnis
+          path: result.json
+          if-no-files-found: ignore

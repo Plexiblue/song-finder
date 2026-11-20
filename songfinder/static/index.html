@@ -83,6 +83,9 @@
   .credit:first-of-type { border-top: 0; }
   .credit a { color: var(--accent); }
   .empty { color: var(--muted); padding: 10px 0; }
+  #preview { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+  .preview-head { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .preview-row { padding: 3px 0; }
   .warnbox { border-color: var(--warn); color: var(--warn); }
   .hidden { display: none !important; }
   @media (max-width: 600px) {
@@ -123,7 +126,7 @@
             <option value="">keine</option><option>chrome</option><option>firefox</option>
             <option>edge</option><option>safari</option><option>brave</option><option>opera</option>
           </select></label>
-        <label>AudD API-Token (audd.io)<input id="audd_token" type="password" placeholder="optional"></label>
+        <label>AudD API-Token – Profi-Scan, schnell &amp; ohne Shazam-Limits<input id="audd_token" type="password" placeholder="optional (audd.io)"></label>
         <label>ACRCloud Host<input id="acr_host" type="text" placeholder="identify-eu-west-1.acrcloud.com"></label>
         <label>ACRCloud Access Key<input id="acr_key" type="password" placeholder="optional"></label>
         <label>ACRCloud Access Secret<input id="acr_secret" type="password" placeholder="optional"></label>
@@ -137,6 +140,7 @@
     <div id="pmsg">Starte …</div>
     <div class="bar"><div id="pbar"></div></div>
     <div class="hint" id="ppct"></div>
+    <div id="preview" class="hidden"></div>
   </section>
 
   <section class="card hidden" id="error"><div class="err" id="errmsg"></div></section>
@@ -229,13 +233,22 @@ async function poll() {
   clearTimeout(timer);
   try {
     const d = await (await fetch("/api/job/" + jobId)).json();
-    if (d.state === "running") { setProgress(d.pct, d.msg); timer = setTimeout(poll, 800); return; }
-    $("#go").disabled = false; hide("#progress");
+    if (d.state === "running") { setProgress(d.pct, d.msg); renderPreview(d.partial); timer = setTimeout(poll, 800); return; }
+    $("#go").disabled = false; hide("#progress"); hide("#preview"); $("#preview").innerHTML = "";
     if (d.state === "error") return fail(d.error);
     lastResult = d.result; render(d.result);
   } catch (err) { timer = setTimeout(poll, 2000); }
 }
 
+function renderPreview(p) {
+  const list = p && p.youtube_music;
+  if (!list || !list.length || $("#preview").dataset.n == list.length) return;
+  $("#preview").dataset.n = list.length;
+  $("#preview").innerHTML = `<div class="preview-head">Laut YouTube in diesem Video (${list.length}) · Zeitstempel werden noch ermittelt …</div>` +
+    list.map((y) => `<div class="preview-row"><b>${esc(y.title)}</b> <span class="hint">– ${esc(y.artist)}</span>
+      ${y.platform ? `<span class="badge plat">${esc(y.platform)}</span>` : ""}</div>`).join("");
+  show("#preview");
+}
 function setProgress(p, m) { $("#pbar").style.width = p + "%"; $("#pmsg").textContent = m; $("#ppct").textContent = p + " %"; }
 function fail(m) { $("#go").disabled = false; hide("#progress"); show("#error");
   $("#errmsg").textContent = m + (STATUS.log ? "\n\nDetails stehen in: " + STATUS.log : ""); }
@@ -273,16 +286,17 @@ function render(r) {
      ${c.urls.map((u) => ` <a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join("")}</div>`).join(""); }
   else hide("#credits");
 
-  $("#stats").textContent = `${st.windows} Ausschnitte analysiert (alle ${st.step} s), ${st.matched} mit Treffer · ` +
-    `Dienste: ${st.providers.join(", ")} · Varianten: ${st.variants.map((x) => ({music:"KI-Musikspur",mix:"Original",side:"Stereo-Trick"}[x])).join(", ")} · ` +
-    `${st.elapsed} s` + (st.errors ? ` · ${st.errors} fehlgeschlagene Anfragen` : "");
+  $("#stats").textContent = (st.youtube_section ? `YouTube nennt ${st.youtube_section} Songs · ` : "") +
+    (st.audd ? `AudD: ${st.audd} · ` : "") +
+    `Shazam: ${st.shazam_windows ?? st.windows} Stellen geprüft, ${st.matched} mit Treffer · ` +
+    `Dauer ${st.elapsed} s` + (st.errors ? ` · ${st.errors} fehlgeschlagene Anfragen` : "");
 }
 
 function songHtml(s, color) {
   const c = color[s.title + s.artist];
   const cover = s.cover ? `<img class="cover" src="${esc(s.cover)}" alt="">`
     : `<div class="cover" style="background:${c}">${esc((s.title||"?")[0])}</div>`;
-  const times = s.segments.map((g) => { const u = ytAt(g.start);
+  const times = !s.segments.length ? `<span class="chip" title="YouTube nennt keine Zeitstempel und die Audio-Analyse hat den Song nicht gefunden">Zeit unbekannt</span>` : s.segments.map((g) => { const u = ytAt(g.start);
     return u ? `<a class="chip" href="${esc(u)}" target="_blank" rel="noopener" title="Im Video ansehen">▶ ${esc(g.label)}</a>`
              : `<span class="chip">${esc(g.label)}</span>`; }).join("");
   const links = [];
@@ -295,7 +309,7 @@ function songHtml(s, color) {
   s.links.filter((l) => l.label === "Spotify" || l.label === "YouTube").forEach((l) => links.push(a(l, l.label)));
   const others = s.links.filter((l) => l !== own && l.label !== "Spotify" && l.label !== "YouTube");
   links.push(`<details class="more"><summary>${own ? "Andere Plattformen" : "Plattform suchen"}</summary>${others.map((l) => a(l, l.label)).join(" · ")}</details>`);
-  const meta = [s.label && "Label: " + s.label, s.album && "Album: " + s.album, s.released, s.isrc && "ISRC " + s.isrc,
+  const meta = [s.license && "Lizenz laut YouTube: " + s.license, s.label && "Label: " + s.label, s.album && "Album: " + s.album, s.released, s.isrc && "ISRC " + s.isrc,
                 s.song_offset != null && "Stelle im Song ≈ " + fmt(s.song_offset)].filter(Boolean).map(esc).join(" · ");
   return `<div class="song">${cover}
     <div><div class="title">${esc(s.title)}</div><div class="artist">${esc(s.artist)}</div>
@@ -304,7 +318,8 @@ function songHtml(s, color) {
       <div class="links">${links.join(" · ")}</div></div>
     <div class="side">
       <span class="badge plat ${s.platform ? "" : "unknown"}" title="${s.platform_source ? "erkannt über " + esc(s.platform_source) : "Plattform nicht eindeutig, nutze die Such-Links"}">${esc(s.platform || "Plattform unbekannt")}</span>
-      <span class="hint conf-${s.confidence}">Sicherheit: ${esc(s.confidence)} (${s.hits}×)</span>
+      ${s.hits ? `<span class="hint conf-${s.confidence}">Sicherheit: ${esc(s.confidence)} (${s.hits}×)</span>` : ""}
+      ${s.youtube ? `<span class="hint conf-hoch">✓ laut YouTube</span>` : ""}
       ${s.in_description ? `<span class="hint conf-hoch">✓ in Beschreibung</span>` : ""}
       <button type="button" class="hint" onclick="copyText(${esc(JSON.stringify(s.title + " – " + s.artist))}).then(() => { this.textContent = 'Kopiert ✓'; })">Kopieren</button>
     </div></div>`;

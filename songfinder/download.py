@@ -32,7 +32,7 @@ def _js_runtimes() -> dict:
 
 
 def download(url: str, workdir: Path, progress: ProgressFn | None = None,
-             cookies_browser: str | None = None) -> tuple[dict, Path]:
+             cookies_browser: str | None = None, on_music=None) -> tuple[dict, Path]:
     """Lädt nur die Tonspur herunter. Gibt (Metadaten, Pfad zur Audiodatei) zurück."""
     from . import updater
 
@@ -64,9 +64,21 @@ def download(url: str, workdir: Path, progress: ProgressFn | None = None,
     if cookies_browser:  # hilft bei "Sign in to confirm you're not a bot"
         opts["cookiesfrombrowser"] = (cookies_browser,)
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+        info = ydl.extract_info(url, download=False)
         if info.get("_type") == "playlist" and info.get("entries"):
             info = next(e for e in info["entries"] if e)
+        # Zuerst YouTubes eigene Musik-Angaben – die sind sofort da
+        yt_music: list[dict] = []
+        if (info.get("extractor_key") or "").startswith("Youtube") and info.get("id"):
+            try:
+                from .youtube_music import fetch_music_section
+
+                yt_music = fetch_music_section(ydl, info["id"])
+            except Exception as exc:  # Seite geändert o. ä. – Audio-Analyse läuft trotzdem
+                print(f"YouTube-Musikabschnitt nicht lesbar: {type(exc).__name__}: {exc}")
+        if on_music:
+            on_music(yt_music, info)
+        info = ydl.process_ie_result(info, download=True)
         path = Path(ydl.prepare_filename(info))
 
     if not path.exists():  # Endung kann vom Format abweichen
@@ -86,5 +98,6 @@ def download(url: str, workdir: Path, progress: ProgressFn | None = None,
         # YouTube liefert diese Felder, wenn das Video einen Musik-Abschnitt hat
         "yt_track": info.get("track"),
         "yt_artist": info.get("artist") or info.get("creator"),
+        "yt_music": yt_music,
     }
     return meta, path

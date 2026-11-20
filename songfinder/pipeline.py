@@ -11,7 +11,8 @@ from typing import Callable
 
 from . import audio
 from .platforms import credit_matches, parse_description, platform_from_label, search_links
-from .recognize import Match, Recognizer, ShazamBlocked, ShazamRecognizer, build_recognizers
+from .recognize import (Match, Recognizer, ShazamBlocked, ShazamRecognizer, audd_enterprise,
+                        build_recognizers)
 
 MODES = {  # Schrittweite zwischen zwei 12-s-Ausschnitten
     "schnell": 15.0,
@@ -73,23 +74,42 @@ class Stages:
         self.cb(int(100 * (lo + (hi - lo) * max(0.0, min(1.0, frac)))), msg)
 
 
-def analyze(source: str, opts: Options | None = None, progress: ProgressFn | None = None) -> dict:
+def analyze(source: str, opts: Options | None = None, progress: ProgressFn | None = None,
+            on_partial: Callable[[dict], None] | None = None) -> dict:
+    """Ablauf:
+    1. YouTubes eigener Musik-Abschnitt (sofort, kostenlos)
+    2. AudD-Scan der ganzen Datei, falls ein Token hinterlegt ist (schnell, mit Zeitstempeln)
+    3. Shazam für die Stellen, die noch niemand erkannt hat
+    """
     opts = opts or Options()
     step = MODES.get(opts.mode, MODES["normal"])
     want_ai = opts.use_ai == "an" or (opts.use_ai == "auto" and audio.demucs_available())
     if opts.use_ai == "an" and not audio.demucs_available():
         raise RuntimeError("KI-Trennung ist nicht installiert. Bitte 'pip install -r requirements-ki.txt' ausführen.")
+    audd_token = (opts.keys or {}).get("audd_token")
+    window_keys = {k: v for k, v in (opts.keys or {}).items() if k != "audd_token"}
 
-    st = Stages(progress, {"download": 12, "prepare": 3, "ai": 35 if want_ai else 0, "recognize": 50})
+    st = Stages(progress, {"download": 12, "prepare": 3, "ai": 35 if want_ai else 0,
+                           "audd": 20 if audd_token else 0, "recognize": 50})
     t0 = time.time()
     workdir = Path(tempfile.mkdtemp(prefix="songfinder_"))
+
+    def music_found(songs: list[dict], info: dict) -> None:
+        if on_partial:
+            on_partial({"video": {"id": info.get("id"), "title": info.get("title"),
+                                  "uploader": info.get("uploader") or info.get("channel"),
+                                  "thumbnail": info.get("thumbnail"),
+                                  "duration_fmt": fmt_time(info.get("duration")),
+                                  "webpage_url": info.get("webpage_url")},
+                        "youtube_music": [enrich_youtube_song(x) for x in songs]})
+
     try:
-        # 1) Quelle holen
+        # 1) Quelle holen (+ YouTube-Musikabschnitt)
         local = Path(source.strip().strip('"'))
         if local.exists() and local.is_file():
             meta = {"id": None, "title": local.stem, "uploader": "", "duration": None,
                     "description": "", "webpage_url": str(local), "thumbnail": None,
-                    "yt_track": None, "yt_artist": None}
+                    "yt_track": None, "yt_artist": None, "yt_music": []}
             src_path = local
         else:
             st.report("download", 0, "Video-Infos werden geladen …")
@@ -97,7 +117,7 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
 
             meta, src_path = download(source.strip(), workdir,
                                       lambda f, m: st.report("download", f, m),
-                                      cookies_browser=opts.cookies_browser)
+                                      cookies_browser=opts.cookies_browser, on_music=music_found)
         st.report("download", 1, "Download fertig")
 
         # 2) Aufbereiten
@@ -111,32 +131,117 @@ def analyze(source: str, opts: Options | None = None, progress: ProgressFn | Non
                                          lambda f, m: st.report("ai", f, m))
         src = audio.AudioSource(stereo, music)
         windows = audio.plan_windows(src.duration, step)
-        st.report("recognize", 0, f"{len(windows)} Ausschnitte geplant, starte Erkennung …")
 
+        # 3) AudD: ganze Datei in einem Rutsch
+        hits: list[Hit] = []
+        audd_info = None
+        if audd_token:
+            st.report("audd", 0.1, "Profi-Scan (AudD) läuft – die ganze Tonspur wird analysiert …")
+            try:
+                mp3 = audio.to_mp3(src_path, workdir / "upload.mp3")
+                for start, end, m in asyncio.run(audd_enterprise(audd_token, mp3)):
+                    hits.append(Hit(start, end, "mix", m))
+                audd_info = f"{len(hits)} Treffer"
+            except Exception as exc:
+                audd_info = f"Fehler: {exc}"
+                print(f"AudD-Scan fehlgeschlagen: {exc}")
+            st.report("audd", 1, "Profi-Scan fertig")
+
+        # 4) Shazam nur dort, wo noch nichts erkannt wurde
+        covered = [(h.start, h.end) for h in hits]
+        todo = [w for w in windows if not _is_covered(w, covered)]
         order = (["music"] if music else []) + ["mix"] + (["side"] if opts.use_side else [])
+        st.report("recognize", 0, f"{len(todo)} Stellen werden mit Shazam geprüft …"
+                  if todo else "Alles erkannt")
+        try:
+            more, stats = asyncio.run(_recognize_all(src, todo, order, window_keys,
+                                                     lambda f, m: st.report("recognize", f, m)))
+        except RecognitionError as exc:
+            if not (hits or meta.get("yt_music")):
+                raise
+            # YouTube/AudD haben schon geliefert → Ergebnis trotzdem zeigen
+            more = []
+            stats = {"silent": 0, "matched": 0, "requests": 0, "errors": 1, "providers": ["Shazam"],
+                     "error_samples": [str(exc)[:300]], "rate_limited": 0,
+                     "warning": "Shazam war nicht erreichbar – die Liste stammt nur aus "
+                                + ("YouTube und AudD." if hits and meta.get("yt_music")
+                                   else "dem AudD-Scan." if hits else "YouTubes Musik-Angaben (ohne Zeitstempel).")}
+        hits = sorted(hits + more, key=lambda h: h.start)
 
-        # 3) Erkennen
-        hits, stats = asyncio.run(_recognize_all(src, windows, order, opts.keys,
-                                                 lambda f, m: st.report("recognize", f, m)))
-
-        # 4) Zusammenführen
+        # 5) Zusammenführen
         credits = parse_description(meta.get("description", ""))
-        songs = merge_hits(hits, step, credits)
+        songs = merge_hits(hits, max(step, 12.0), credits)
+        songs = merge_youtube(songs, meta.get("yt_music") or [])
 
         stats.update({
+            "windows": len(windows),
+            "shazam_windows": len(todo),
             "duration": src.duration,
             "duration_fmt": fmt_time(src.duration),
             "step": step,
             "mode": opts.mode,
             "ai_used": bool(music),
             "variants": order,
+            "audd": audd_info,
+            "youtube_section": len(meta.get("yt_music") or []),
             "elapsed": round(time.time() - t0, 1),
         })
+        if audd_token:
+            stats["providers"] = ["YouTube", "AudD"] + [p for p in stats["providers"] if p != "AudD"]
+        else:
+            stats["providers"] = ["YouTube"] + stats["providers"]
         meta_out = {k: v for k, v in meta.items() if k != "description"}
         return {"video": meta_out, "songs": songs, "credits": credits, "stats": stats}
     finally:
         if not opts.keep_files:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _is_covered(w: audio.Window, covered: list[tuple[float, float]]) -> bool:
+    """Ein Ausschnitt gilt als erledigt, wenn ein Treffer ihn zu mindestens 60 % abdeckt."""
+    need = (w.end - w.start) * 0.6
+    for s, e in covered:
+        if min(e, w.end) - max(s, w.start) >= need:
+            return True
+    return False
+
+
+def enrich_youtube_song(y: dict) -> dict:
+    platform = platform_from_label(y.get("license"), y.get("album"), y.get("artist"))
+    return {**y, "platform": platform.name if platform else None,
+            "links": search_links(y["title"], y.get("artist", ""))}
+
+
+def merge_youtube(songs: list[dict], yt_music: list[dict]) -> list[dict]:
+    """Ergänzt die Audio-Treffer um YouTubes eigene Angaben (bestätigt oder zusätzlich)."""
+    from .recognize import normalize
+
+    for y in yt_music:
+        y = enrich_youtube_song(y)
+        nt = normalize(y["title"])
+        match = next((s for s in songs if normalize(s["title"]) == nt or
+                      (len(nt) > 4 and (nt in normalize(s["title"]) or normalize(s["title"]) in nt))), None)
+        if match:
+            match["youtube"] = True
+            match["confidence"] = "hoch"
+            match["license"] = y.get("license")
+            if not match.get("platform") and y["platform"]:
+                match["platform"], match["platform_source"] = y["platform"], "YouTube"
+        else:
+            songs.append({
+                "title": y["title"], "artist": y.get("artist") or "", "album": y.get("album"),
+                "label": None, "released": None, "isrc": None,
+                "platform": y["platform"], "platform_source": "YouTube" if y["platform"] else None,
+                "direct_url": None, "confidence": "hoch", "hits": 0, "first_seen": 10**9,
+                "total_seconds": 0, "segments": [], "song_offset": None, "variants": [],
+                "providers": ["YouTube"], "shazam_url": None, "apple_url": None, "cover": None,
+                "in_description": False, "links": y["links"], "youtube": True,
+                "license": y.get("license"),
+            })
+    for s in songs:
+        s.setdefault("youtube", False)
+        s.setdefault("license", None)
+    return songs
 
 
 async def _recognize_all(src: audio.AudioSource, windows: list[audio.Window], order: list[str],

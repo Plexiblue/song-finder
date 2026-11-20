@@ -27,8 +27,11 @@ def _run_job(job_id: str, source: str, opts: Options) -> None:
     def progress(pct: int, msg: str) -> None:
         job["pct"], job["msg"] = pct, msg
 
+    def partial(data: dict) -> None:
+        job["partial"] = data
+
     try:
-        job["result"] = analyze(source, opts, progress)
+        job["result"] = analyze(source, opts, progress, on_partial=partial)
         job["state"], job["pct"], job["msg"] = "done", 100, "Fertig"
     except Exception as exc:
         traceback.print_exc()

@@ -273,3 +273,78 @@ def build_recognizers(keys: dict | None, on_wait=None) -> list[Recognizer]:
     if keys.get("acr_host") and keys.get("acr_key") and keys.get("acr_secret"):
         recs.append(AcrCloudRecognizer(keys["acr_host"], keys["acr_key"], keys["acr_secret"]))
     return recs
+
+
+# --------------------------------------------------------------------------- #
+# AudD „Enterprise“: ganze Datei auf einmal (schnell, ohne Rate-Limit-Probleme)
+# Schnittstelle wie im offiziellen SDK (pypi: audd): POST https://enterprise.audd.io/
+#   Felder: api_token, file, accurate_offsets, (skip, every, limit, skip_first_seconds)
+#   Antwort: {"status": "success", "result": [{"offset": "MM:SS",
+#             "songs": [{"title", "artist", "album", "label", "isrc", "score",
+#                        "song_link", "release_date", "start_offset", "end_offset"}]}]}
+#   Abrechnung: 1 Anfrage je 12 s Audio.
+# --------------------------------------------------------------------------- #
+
+AUDD_ENTERPRISE_URL = "https://enterprise.audd.io/"
+
+AUDD_ERRORS = {
+    900: "AudD-Token ist ungültig.",
+    901: "AudD-Token fehlt oder ist ungültig.",
+    902: "AudD-Kontingent aufgebraucht – bitte im AudD-Dashboard aufladen.",
+    903: "AudD-Token ist ungültig.",
+}
+
+
+def _offset_seconds(offset) -> float | None:
+    if offset is None:
+        return None
+    try:
+        total = 0.0
+        for part in str(offset).strip().split(":"):
+            total = total * 60 + float(part)
+        return total
+    except ValueError:
+        return None
+
+
+async def audd_enterprise(token: str, audio_path, progress=None) -> list[tuple[float, float, Match]]:
+    """Schickt die komplette Tonspur an AudD und gibt (start, ende, Match) für alle Treffer zurück."""
+    form = aiohttp.FormData()
+    form.add_field("api_token", token)
+    form.add_field("accurate_offsets", "true")
+    with open(audio_path, "rb") as fh:
+        form.add_field("file", fh.read(), filename="audio.mp3", content_type="audio/mpeg")
+    timeout = aiohttp.ClientTimeout(total=3600, connect=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(AUDD_ENTERPRISE_URL, data=form) as resp:
+            body = await resp.json(content_type=None)
+    if not isinstance(body, dict):
+        raise RuntimeError("AudD: unerwartete Antwort")
+    if body.get("status") == "error":
+        err = body.get("error") or {}
+        code = err.get("error_code") if isinstance(err, dict) else None
+        msg = AUDD_ERRORS.get(code) or (err.get("error_message") if isinstance(err, dict) else str(err))
+        if code == 51 and body.get("result") is not None:  # nur Hinweis auf veralteten Parameter
+            pass
+        else:
+            raise RuntimeError(f"AudD: {msg}")
+    out: list[tuple[float, float, Match]] = []
+    for chunk in body.get("result") or []:
+        if not isinstance(chunk, dict):
+            continue
+        base = _offset_seconds(chunk.get("offset"))
+        if base is None:
+            continue
+        for s in chunk.get("songs") or []:
+            if not isinstance(s, dict) or not s.get("title"):
+                continue
+            start = base + (s.get("start_offset") or 0) / 1000
+            end = base + (s.get("end_offset") or 12000) / 1000
+            if end <= start:
+                end = start + 12
+            out.append((start, end, Match(
+                title=s.get("title") or "?", artist=s.get("artist") or "?", provider="AudD",
+                album=s.get("album"), label=s.get("label"), released=s.get("release_date"),
+                isrc=s.get("isrc"), url=s.get("song_link"), extra={"score": s.get("score")},
+            )))
+    return out

@@ -56,6 +56,18 @@ def to_wav(src: Path, dst: Path, sr: int = SR, channels: int = 2) -> Path:
     return dst
 
 
+def to_mp3(src: Path, dst: Path) -> Path:
+    """Kompakte Mono-MP3 für den Upload zu AudD (15 min ≈ 7 MB)."""
+    cmd = [ffmpeg_exe(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+           "-vn", "-ac", "1", "-ar", "22050", "-b:a", "64k", str(dst)]
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags,
+                          encoding="utf-8", errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg (MP3): {proc.stderr.strip()[-300:]}")
+    return dst
+
+
 def wav_bytes(samples: np.ndarray, sr: int = SR) -> bytes:
     buf = io.BytesIO()
     sf.write(buf, samples, sr, format="WAV", subtype="PCM_16")
